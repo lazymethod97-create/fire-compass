@@ -1,4 +1,4 @@
-# FIRE Compass
+﻿# FIRE Compass
 
 FIRE後の生活費、資産寿命、資産取り崩し余力をシミュレーションするWebアプリです。
 
@@ -18,23 +18,19 @@ FIRE後の生活費、資産寿命、資産取り崩し余力をシミュレー�
 - ルールベースの判断理由
 - Sprint 1シミュレーションとの二重計上防止
 
+## Sprint 3
+- 市場環境の選択
+- 通常・弱気相場・暴落・深刻な暴落の4段階
+- 市場環境に応じた現金バッファ調整
+- 暴落時の追加投資抑制
+- 暴落時の生活費削減
+- 市場環境別の防御ルール表示
+- 今月の推奨行動への反映
+
 ## 起動
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## テスト
-
-```powershell
-pytest
-```
-
-Sprint 2では、既存2テストに加えて取り崩し・追加投資ルール4テストを追加しています。
-
-## ルール
-
-このアプリは金融商品の売買を自動で決定するものではなく、入力条件に基づくシミュレーションと行動候補を提供します。
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
