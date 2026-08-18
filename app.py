@@ -1,4 +1,5 @@
 import streamlit as st
+from services.action_engine import calculate_monthly_action
 from services.fire_engine import FireInput, run_fire_simulation
 
 st.set_page_config(
@@ -52,6 +53,16 @@ with c9:
         "安全余裕率（%）", min_value=0, max_value=40, value=10, step=5
     )
 
+st.subheader("3. 現金バッファ・資産配分ルール")
+min_cash_months = st.number_input(
+    "最低確保する現金（か月）",
+    min_value=0.0,
+    max_value=36.0,
+    value=12.0,
+    step=1.0,
+    help="純年間支出を基準に、最低限確保したい現金の月数です。",
+)
+
 run = st.button("🧭 FIREシミュレーションを実行", type="primary", use_container_width=True)
 
 if run:
@@ -69,7 +80,28 @@ if run:
         )
     )
 
-    st.subheader("3. 現在のFIRE状態")
+    action = calculate_monthly_action(
+        cash_assets=cash_assets,
+        total_assets=current_assets,
+        net_annual_spending=result.net_annual_spending,
+        min_cash_months=min_cash_months,
+    )
+
+    st.subheader("4. 今月の推奨行動")
+    st.success(f"**{action.action}**")
+
+    a1, a2, a3 = st.columns(3)
+    a1.metric("目標現金", f"{action.target_cash_amount:,.1f}万円")
+    a2.metric("追加投資額", f"{action.additional_investment:,.1f}万円")
+    a3.metric("取り崩し額", f"{action.investment_withdrawal:,.1f}万円")
+
+    st.info(action.reason)
+    st.caption(
+        "このルールは現金と投資資産の配分を示すもので、Sprint 1の総資産シミュレーションに"
+        "追加の資産減少・増加を二重計上しません。"
+    )
+
+    st.subheader("5. 現在のFIRE状態")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("純年間支出", f"{result.net_annual_spending:,.0f}万円")
@@ -79,13 +111,13 @@ if run:
 
     st.info(result.advice)
 
-    st.subheader("4. 資産推移")
+    st.subheader("6. 資産推移")
 
     chart_df = result.yearly_df.set_index("age")[["standard", "bear", "bull"]]
     chart_df.columns = ["標準", "悲観", "楽観"]
     st.line_chart(chart_df, use_container_width=True)
 
-    st.subheader("5. シナリオ結果")
+    st.subheader("7. シナリオ結果")
 
     scenario_cols = st.columns(3)
     for col, scenario in zip(scenario_cols, result.scenario_summaries):
@@ -100,9 +132,12 @@ else:
 ### このアプリで分かること
 - 今の資産と収入なら、月にいくら使えるか
 - 現金だけで何か月生活できるか
+- 最低現金バッファを何か月分にするか
+- 現金の超過時にいくら追加投資するか
+- 現金不足時にいくら投資資産から補充するか
 - 想定利回り・インフレを踏まえた資産寿命
 - 標準・悲観・楽観シナリオでの資産推移
 
-> ※現在はSprint 1のシミュレーション版です。実際の売買判断を自動で行う機能は、後続Sprintで追加します。
+> ※金融商品の売買を自動で決定するものではなく、入力条件に基づくシミュレーションと行動候補を表示します。
 """
     )
