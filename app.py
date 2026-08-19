@@ -1,8 +1,15 @@
-﻿import streamlit as st
+import os
+
+import streamlit as st
+from dotenv import load_dotenv
+
+from services.ai_advisor import generate_ai_advice
 from services.action_engine import calculate_monthly_action
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 st.set_page_config(
     page_title="FIRE Compass",
     page_icon="🧭",
@@ -242,7 +249,19 @@ if run:
                 f"{condition_strategy.spending_reduction_pct:.0f}%**"
             )
 
-    st.subheader("6. 現在のFIRE状態")
+    st.subheader("6. AI FIREアドバイス")
+
+    ai_advice = generate_ai_advice(
+        fire_result=result,
+        market_condition=market_condition,
+        strategy=strategy,
+        recommended_action=recommended_action,
+        additional_investment=additional_investment,
+        investment_withdrawal=investment_withdrawal,
+    )
+
+    st.markdown(ai_advice)
+    st.subheader("7. 現在のFIRE状態")
 
     m1, m2, m3, m4 = st.columns(4)
 
@@ -268,7 +287,7 @@ if run:
 
     st.info(result.advice)
 
-    st.subheader("7. 資産推移")
+    st.subheader("8. 資産推移")
 
     chart_df = result.yearly_df.set_index("age")[
         ["standard", "bear", "bull"]
@@ -285,7 +304,7 @@ if run:
         use_container_width=True,
     )
 
-    st.subheader("8. シナリオ結果")
+    st.subheader("9. シナリオ結果")
 
     scenario_cols = st.columns(3)
 
