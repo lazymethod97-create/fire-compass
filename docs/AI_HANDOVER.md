@@ -1,51 +1,64 @@
-# AI HANDOVER
+﻿# AI HANDOVER
 
 ## 現在地
-FIRE Compass Sprint 2 完了。
+FIRE Compass Sprint 5 実装。
 
-## 実装済み
+## GitHub
+Source of Truth:
+https://github.com/lazymethod97-create/fire-compass
+
+Sprint 4完了コミット:
+5cd4240d02e4220937f613b156ffdfe3c5cd4857
+
+## Sprint 1〜4
 - Streamlit UI
-- FIRE入力フォーム
-- 純年間支出
-- 推奨月間支出
-- 現金生活費月数
-- 標準/悲観/楽観シミュレーション
-- 資産推移グラフ
-- 最低現金バッファ（月数）設定
-- 現金超過時の追加投資候補額計算
-- 現金不足時の投資資産からの補充候補額計算
-- 今月の推奨行動表示
-- ルールベースの判断理由表示
-- Sprint 2用テスト4件
+- FIRE資産寿命シミュレーション
+- 現金バッファ・追加投資ルール
+- 暴落時の防御戦略
+- GeminiによるAI FIREアドバイス
+- APIキー未設定・APIエラー時はルールベースへフォールバック
+- Geminiへ金融計算を任せず、Python側の計算結果だけをAIへ渡す
 
-## 設計上の重要点
-`services/fire_engine.py` はSprint 1の資産寿命シミュレーションとして維持する。
-`services/action_engine.py` は現金と投資資産の配分ルールだけを担当する。
-Sprint 2の配分変更は資産総額の増減ではないため、Sprint 1の資産寿命計算と二重計上しない。
+## Sprint 5実装
+ファイル:
+- services/tax_optimization.py
+- tests/test_tax_optimization.py
+
+機能:
+- NISA総枠1,800万円の残りを計算
+- NISA成長投資枠1,200万円の残りを計算
+- NISA年間投資枠360万円の残りを計算
+- iDeCo月額掛金から年間拠出額を計算
+- iDeCo上限を入力可能にして制度変更に対応
+- 年金受給開始年齢65〜75歳を入力
+- 年金受給開始後の年間生活費不足額を計算
+- app.pyに入力・結果表示を統合
+
+重要:
+- NISA残り総枠は市場評価額ではなく累計投資額（簿価）を基準にする
+- iDeCo上限は加入区分等で異なるため、UIから変更可能にする
+- 年金は税引後手取りではなく入力された年金見込額をそのまま使用
+- 既存のfire_engine.py、action_engine.py、crash_strategy.pyは変更しない
 
 ## テスト
-既存2件 + Sprint 2新規4件 = 6件。
-CI/ローカル環境で `pytest` を実行して確認する。
+Sprint 5追加テスト: 5件
 
-## 次にやること
-Sprint 3として、暴落時の生活費調整と現金バッファ戦略を実装する。
+開発環境で以下を実行:
+python -m pytest -q
 
-## 注意
-現在のシミュレーションは年次の簡易モデル。税金、NISA、iDeCo、年金、シーケンス・オブ・リターンズ・リスク、変動リターンは未実装。
+想定:
+既存12件 + Sprint 5 5件 = 17件
 
-## ���ݒn
-FIRE Compass Sprint 3 �����B
+## 次の作業
+1. Streamlit起動確認
+2. NISA・iDeCo・年金の入力と結果表示確認
+3. python -m pytest -q
+4. git status / git diff
+5. git add .
+6. git commit -m "Complete Sprint 5 NISA iDeCo pension optimization"
+7. git push origin main
+8. push後にGitHub mainの最新コミットを確認
 
-## Sprint 3�����ς�
-- �s����I��
-- �ʏ� / ��C���� / �\�� / �[���Ȗ\��
-- �s����ʂ̌����o�b�t�@����
-- �s����ʂ̒ǉ������}��
-- �\�����̐�����팸
-- �����̐����s���ւ̔��f
-
-## �e�X�g
-Sprint 1?3 ���v10�������B
-
-## ����Sprint
-Sprint 4 AI FIRE�A�h�o�C�X
+## 設計方針
+1 Sprint = 1主要機能。
+既存のFIREシミュレーションを壊さず、税制・年金最適化を独立モジュールで追加する。

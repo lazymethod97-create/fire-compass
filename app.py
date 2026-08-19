@@ -1,4 +1,4 @@
-import os
+﻿import os
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -7,6 +7,7 @@ from services.ai_advisor import generate_ai_advice
 from services.action_engine import calculate_monthly_action
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
+from services.tax_optimization import TaxOptimizationInput, run_tax_optimization
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -261,7 +262,126 @@ if run:
     )
 
     st.markdown(ai_advice)
-    st.subheader("7. 現在のFIRE状態")
+    st.subheader("7. NISA・iDeCo・年金最適化")
+
+    t1, t2, t3 = st.columns(3)
+
+    with t1:
+        nisa_assets = st.number_input(
+            "NISA現在残高（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+        )
+        nisa_contributed = st.number_input(
+            "NISA累計投資額・簿価（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+            help="NISAの非課税保有限度額は取得価額（簿価）ベースです。",
+        )
+        nisa_growth_contributed = st.number_input(
+            "うち成長投資枠の累計投資額（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+        )
+        nisa_annual_contributed = st.number_input(
+            "今年のNISA投資額（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+        )
+
+    with t2:
+        taxable_assets = st.number_input(
+            "課税口座残高（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+        )
+        ideco_assets = st.number_input(
+            "iDeCo現在残高（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+        )
+        ideco_monthly_contribution = st.number_input(
+            "iDeCo月額掛金（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=0.1,
+        )
+        ideco_annual_limit = st.number_input(
+            "iDeCo年間上限（万円）",
+            min_value=0.0,
+            value=74.4,
+            step=1.0,
+            help="2026年12月1日施行予定の制度改正後の第2号加入者の共通拠出限度額を年額換算した参考値です。実際の上限は加入区分等で異なります。",
+        )
+
+    with t3:
+        annual_pension = st.number_input(
+            "65歳時点の年金見込額（万円/年）",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+        )
+        pension_start_age = st.number_input(
+            "年金受給開始年齢",
+            min_value=65,
+            max_value=75,
+            value=65,
+            step=1,
+        )
+
+    tax_result = run_tax_optimization(
+        TaxOptimizationInput(
+            nisa_assets=nisa_assets,
+            nisa_contributed=nisa_contributed,
+            nisa_growth_contributed=nisa_growth_contributed,
+            nisa_annual_contributed=nisa_annual_contributed,
+            taxable_assets=taxable_assets,
+            ideco_assets=ideco_assets,
+            ideco_monthly_contribution=ideco_monthly_contribution,
+            ideco_annual_limit=ideco_annual_limit,
+            current_age=current_age,
+            pension_start_age=pension_start_age,
+            annual_pension=annual_pension,
+            annual_spending=annual_spending,
+            end_age=end_age,
+        )
+    )
+
+    tax_cols = st.columns(5)
+    tax_cols[0].metric(
+        "NISA残り総枠",
+        f"{tax_result.nisa_remaining_limit:,.0f}万円",
+    )
+    tax_cols[1].metric(
+        "NISA成長枠残り",
+        f"{tax_result.nisa_growth_remaining_limit:,.0f}万円",
+    )
+    tax_cols[2].metric(
+        "今年のNISA残り",
+        f"{tax_result.nisa_annual_room:,.0f}万円",
+    )
+    tax_cols[3].metric(
+        "iDeCo年額拠出",
+        f"{tax_result.ideco_annual_contribution:,.1f}万円",
+    )
+    tax_cols[4].metric(
+        "年金開始後の年間不足",
+        f"{tax_result.pension_gap_after_start:,.0f}万円",
+    )
+
+    st.info(tax_result.recommendation)
+    st.caption(
+        "NISAは年間360万円・生涯1,800万円（成長投資枠は1,200万円が内数）を基準に計算します。"
+        "年金は65〜75歳の受給開始年齢を入力し、開始後の生活費不足額を表示します。"
+    )
+
+    st.subheader("8. 現在のFIRE状態")
 
     m1, m2, m3, m4 = st.columns(4)
 
@@ -287,7 +407,7 @@ if run:
 
     st.info(result.advice)
 
-    st.subheader("8. 資産推移")
+    st.subheader("9. 資産推移")
 
     chart_df = result.yearly_df.set_index("age")[
         ["standard", "bear", "bull"]
@@ -304,7 +424,7 @@ if run:
         use_container_width=True,
     )
 
-    st.subheader("9. シナリオ結果")
+    st.subheader("10. シナリオ結果")
 
     scenario_cols = st.columns(3)
 
@@ -344,3 +464,4 @@ else:
 > 入力条件に基づくシミュレーションと行動候補を表示します。
 """
     )
+
