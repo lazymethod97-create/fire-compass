@@ -62,3 +62,26 @@ python -m pytest -q
 ## 設計方針
 1 Sprint = 1主要機能。
 既存のFIREシミュレーションを壊さず、税制・年金最適化を独立モジュールで追加する。
+
+## Sprint 6実装方針
+
+機能:
+- FIREシミュレーション結果の保存
+- JSON形式の履歴管理
+- 最大20件
+- 履歴一覧表示
+- 個別削除
+- 全履歴削除
+
+追加:
+- services/history_manager.py
+- tests/test_history_manager.py
+
+重要:
+- fire_engine.pyは変更しない
+- action_engine.pyは変更しない
+- crash_strategy.pyは変更しない
+- tax_optimization.pyは変更しない
+- AI計算ロジックは変更しない
+- 履歴ファイルは .fire_compass_history.json
+- 履歴ファイルはGit管理しない

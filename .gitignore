@@ -2,4 +2,5 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+.env.fire_compass_history.json
 .env

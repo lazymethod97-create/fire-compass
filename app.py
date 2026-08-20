@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -7,9 +7,15 @@ from services.ai_advisor import generate_ai_advice
 from services.action_engine import calculate_monthly_action
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
+from services.history_manager import (
+    delete_history,
+    load_history,
+    save_history,
+)
 from services.tax_optimization import TaxOptimizationInput, run_tax_optimization
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 st.set_page_config(
     page_title="FIRE Compass",
@@ -381,6 +387,58 @@ if run:
         "年金は65〜75歳の受給開始年齢を入力し、開始後の生活費不足額を表示します。"
     )
 
+    st.session_state["latest_simulation"] = {
+        "name": "FIREシミュレーション",
+        "inputs": {
+            "current_age": current_age,
+            "end_age": end_age,
+            "current_assets": current_assets,
+            "cash_assets": cash_assets,
+            "annual_spending": annual_spending,
+            "annual_side_income": annual_side_income,
+            "expected_return": expected_return,
+            "inflation": inflation,
+            "safety_margin": safety_margin,
+            "min_cash_months": min_cash_months,
+            "market_condition": market_condition,
+            "nisa_assets": nisa_assets,
+            "nisa_contributed": nisa_contributed,
+            "nisa_growth_contributed": nisa_growth_contributed,
+            "nisa_annual_contributed": nisa_annual_contributed,
+            "taxable_assets": taxable_assets,
+            "ideco_assets": ideco_assets,
+            "ideco_monthly_contribution": ideco_monthly_contribution,
+            "ideco_annual_limit": ideco_annual_limit,
+            "annual_pension": annual_pension,
+            "pension_start_age": pension_start_age,
+        },
+        "results": {
+            "asset_depletion_label": result.asset_depletion_label,
+            "net_annual_spending": result.net_annual_spending,
+            "recommended_monthly_spending": result.recommended_monthly_spending,
+            "cash_months": result.cash_months,
+            "target_cash": target_cash,
+            "additional_investment": additional_investment,
+            "investment_withdrawal": investment_withdrawal,
+            "recommended_action": recommended_action,
+            "pension_gap_after_start": tax_result.pension_gap_after_start,
+            "nisa_remaining_limit": tax_result.nisa_remaining_limit,
+            "nisa_growth_remaining_limit": tax_result.nisa_growth_remaining_limit,
+            "nisa_annual_room": tax_result.nisa_annual_room,
+            "ideco_annual_contribution": tax_result.ideco_annual_contribution,
+        },
+        "scenarios": [
+            {
+                "name": scenario.name,
+                "final_assets": scenario.final_assets,
+                "min_assets": scenario.min_assets,
+                "depleted_at": scenario.depleted_at,
+            }
+            for scenario in result.scenario_summaries
+        ],
+    }
+
+
     st.subheader("8. 現在のFIRE状態")
 
     m1, m2, m3, m4 = st.columns(4)
@@ -464,4 +522,113 @@ else:
 > 入力条件に基づくシミュレーションと行動候補を表示します。
 """
     )
+st.subheader("11. 保存・履歴管理")
 
+latest_simulation = st.session_state.get(
+    "latest_simulation"
+)
+
+if latest_simulation:
+    st.write(
+        "直前のシミュレーション結果を名前を付けて保存できます。"
+    )
+
+    history_name = st.text_input(
+        "履歴名",
+        value=latest_simulation.get(
+            "name",
+            "FIREシミュレーション",
+        ),
+        key="history_name",
+    )
+
+    if st.button(
+        "💾 最新結果を履歴に保存",
+        use_container_width=True,
+    ):
+        record = dict(latest_simulation)
+        record["name"] = history_name.strip() or "FIREシミュレーション"
+
+        save_history(
+            record,
+            path=HISTORY_PATH,
+        )
+
+        st.success(
+            f"「{record['name']}」を履歴に保存しました。"
+        )
+        st.rerun()
+else:
+    st.info(
+        "「FIREシミュレーションを実行」を先に実行すると、"
+        "ここから結果を保存できます。"
+    )
+
+history_records = load_history(
+    path=HISTORY_PATH,
+)
+
+if history_records:
+    st.markdown("### 保存済み履歴")
+
+    st.caption(
+        f"最大20件まで保存されます。現在 {len(history_records)} 件。"
+    )
+
+    for index, record in enumerate(history_records):
+        record_id = record.get("id", "")
+        results = record.get("results", {})
+
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1])
+
+            with c1:
+                st.markdown(
+                    f"**{record.get('name', '名称未設定')}**"
+                )
+
+                st.caption(
+                    record.get(
+                        "created_at",
+                        "日時不明",
+                    )
+                )
+
+                st.write(
+                    f"資産寿命判定: "
+                    f"**{results.get('asset_depletion_label', '---')}**"
+                )
+
+                st.write(
+                    f"純年間支出: "
+                    f"**{results.get('net_annual_spending', 0):,.0f}万円**"
+                )
+
+                st.write(
+                    f"現金: "
+                    f"**{results.get('cash_months', 0):,.1f}か月**"
+                )
+
+            with c2:
+                if st.button(
+                    "🗑️ 削除",
+                    key=f"delete_history_{record_id}_{index}",
+                ):
+                    delete_history(
+                        record_id,
+                        path=HISTORY_PATH,
+                    )
+                    st.rerun()
+
+    if st.button(
+        "🗑️ 全履歴を削除",
+        use_container_width=True,
+    ):
+        history_path = Path(HISTORY_PATH)
+
+        if history_path.exists():
+            history_path.unlink()
+
+        st.rerun()
+else:
+    st.info("保存済み履歴はありません。")

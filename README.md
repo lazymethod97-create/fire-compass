@@ -34,3 +34,22 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m streamlit run app.py
+
+## Sprint 4
+- GeminiによるAI FIREアドバイス
+- API未設定・APIエラー時のルールベースフォールバック
+
+## Sprint 5
+- NISA年間投資枠・生涯非課税保有限度額
+- NISA成長投資枠
+- iDeCo年間拠出額
+- 年金受給開始年齢
+- 年金受給開始後の生活費不足額
+
+## Sprint 6
+- シミュレーション結果の保存
+- 履歴一覧表示
+- 履歴の個別削除
+- 全履歴削除
+- 最大20件のJSON履歴管理
+- 履歴データはGit管理対象外
