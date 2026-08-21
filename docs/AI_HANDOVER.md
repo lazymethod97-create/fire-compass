@@ -85,3 +85,33 @@ python -m pytest -q
 - AI計算ロジックは変更しない
 - 履歴ファイルは .fire_compass_history.json
 - 履歴ファイルはGit管理しない
+
+## Sprint 7完了
+
+主要機能:
+保存済みFIREシミュレーション履歴のレポート出力。
+
+追加:
+- services/report_generator.py
+- tests/test_report_generator.py
+- pages/7_📄_FIREレポート.py
+
+設計:
+- Sprint 6の履歴データを再利用
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- history_manager.pyを変更しない
+- 新規依存関係を追加しない
+- HTMLレポートとして独立
+- ブラウザの印刷機能でPDF化可能
+- 金融商品の売買を断定しない注意事項を表示
+
+テスト:
+python -m pytest -q
+25 passed
+
+次Sprint:
+Sprint 8 — 公開化・セキュリティ・監視
