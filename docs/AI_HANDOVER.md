@@ -115,3 +115,31 @@ python -m pytest -q
 
 次Sprint:
 Sprint 8 — 公開化・セキュリティ・監視
+
+## Sprint 8完了
+主要機能:
+公開環境セキュリティガード。
+
+追加:
+- services/security.py
+- tests/test_security.py
+- tests/test_history_public_mode.py
+- pages/8_🔒_公開運用・セキュリティ.py
+
+設計:
+- FIRE_COMPASS_PUBLIC_MODE で公開モードを判定
+- 公開モード時の履歴をStreamlitセッション単位へ分離
+- セッションIDはSHA-256でハッシュ化
+- セッションIDを取得できない場合は共有履歴ファイルへ書き込まない
+- GEMINI_API_KEYの値自体は画面へ表示しない
+- safe_error_messageで内部情報を利用者へ返さない
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- report_generator.pyを変更しない
+
+テスト:
+python -m pytest -q
+32 passed

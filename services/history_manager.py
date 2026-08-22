@@ -1,16 +1,54 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 DEFAULT_HISTORY_PATH = ".fire_compass_history.json"
 DEFAULT_MAX_RECORDS = 20
+PUBLIC_MODE_ENV = "FIRE_COMPASS_PUBLIC_MODE"
 
 
-def _history_path(path: str | Path | None = None) -> Path:
-    return Path(path or DEFAULT_HISTORY_PATH)
+def _is_public_mode() -> bool:
+    return os.getenv(PUBLIC_MODE_ENV, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _streamlit_session_suffix() -> str | None:
+    # ??????????Streamlit?????????????
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        session_id = getattr(ctx, "session_id", None) if ctx else None
+
+        if not session_id:
+            return None
+
+        return hashlib.sha256(
+            session_id.encode("utf-8")
+        ).hexdigest()[:16]
+    except Exception:
+        return None
+
+
+def _history_path(path: str | Path | None = None) -> Path | None:
+    base_path = Path(path or DEFAULT_HISTORY_PATH)
+
+    if not _is_public_mode():
+        return base_path
+
+    suffix = _streamlit_session_suffix()
+    if not suffix:
+        return None
+
+    return base_path.with_name(
+        f"{base_path.stem}_{suffix}{base_path.suffix}"
+    )
 
 
 def load_history(
@@ -22,7 +60,7 @@ def load_history(
 
     file_path = _history_path(path)
 
-    if not file_path.exists():
+    if file_path is None or not file_path.exists():
         return []
 
     try:
@@ -78,6 +116,12 @@ def save_history(
     history = history[:max_records]
 
     file_path = _history_path(path)
+
+    if file_path is None:
+        # ???????????ID??????????
+        # ????????????????
+        return saved
+
     file_path.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -118,6 +162,9 @@ def delete_history(
     if deleted:
         file_path = _history_path(path)
 
+        if file_path is None:
+            return False
+
         if remaining:
             file_path.write_text(
                 json.dumps(
@@ -138,5 +185,5 @@ def clear_history(
 ) -> None:
     file_path = _history_path(path)
 
-    if file_path.exists():
+    if file_path is not None and file_path.exists():
         file_path.unlink()

@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .fire_compass_history.json
 .env
+.fire_compass_history_*.json
