@@ -2,7 +2,12 @@ import os
 
 import streamlit as st
 
-from services.app_logger import clear_events, load_events
+from services.app_logger import (
+    clear_events,
+    events_export_filename,
+    export_events_to_csv,
+    load_events,
+)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVENT_LOG_PATH = os.path.join(BASE_DIR, ".fire_compass_events.log")
@@ -61,6 +66,24 @@ else:
                 f"　`{event.get('timestamp', '日時不明')}`"
             )
             st.caption(event.get("message", ""))
+
+st.divider()
+
+st.subheader("ログのエクスポート")
+st.write(
+    "現在表示中のレベルのログを、Excel等で開けるCSVファイルとしてダウンロードできます。"
+)
+
+csv_data = export_events_to_csv(events)
+
+st.download_button(
+    label="📥 表示中のログをCSVでダウンロード",
+    data=csv_data,
+    file_name=events_export_filename(selected_level),
+    mime="text/csv",
+    use_container_width=True,
+    disabled=not events,
+)
 
 st.divider()
 

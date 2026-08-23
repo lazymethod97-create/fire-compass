@@ -78,6 +78,16 @@ UI改善・レポート出力 — 完了
 - 金融計算ロジック・AIアドバイスの内容は変更しない
 - テスト54件すべて成功（既存41件 + Sprint 10 13件）
 
-## Sprint 11候補
-- ログのCSVエクスポート
-- ドキュメントの表記統一
+## Sprint 11
+ログのCSVエクスポート — 完了
+
+- 「📋 ログ・監視」ページに、現在表示中のレベルのログをCSVでダウンロードする
+  ボタンを追加
+- services/app_logger.pyへexport_events_to_csv() / events_export_filename()
+  を追加（既存のlog_event / load_events / clear_eventsは変更しない）
+- Excel（Windows）で文字化けしないよう、UTF-8 BOM付き・CRLF区切りで出力
+- 金融計算ロジック・AIアドバイスの内容は変更しない
+- テスト62件すべて成功（既存54件 + Sprint 11 8件）
+
+## Sprint 12候補
+- ドキュメントの表記統一（各docsファイルの見出し・記法の軽微な整理）

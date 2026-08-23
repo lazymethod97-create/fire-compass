@@ -255,6 +255,66 @@ python -m pytest -q
 8. git push origin main
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 11候補（未着手）
-- ログ・監視ページからのログエクスポート（CSVダウンロード等）
+## Sprint 11完了
+主要機能:
+ログ・監視ページからのログCSVエクスポート。
+
+追加・変更:
+- services/app_logger.py：
+  - export_events_to_csv(events) を追加
+    - load_eventsの戻り値（timestamp / level / event_type / message）を
+      そのままCSV文字列へ変換するだけの整形専用関数
+      （金融計算・AIアドバイスのロジックには一切関与しない）
+    - Excel（Windows）で文字化けしないよう、UTF-8 BOM付き・CRLF区切りで出力
+    - list以外が渡された場合はValueError、dict以外の要素は無視
+  - events_export_filename(level=None) を追加
+    - ダウンロード用ファイル名（fire_compass_events_[レベル_]日時.csv）を生成
+  - 既存のlog_event / load_events / clear_eventsは変更しない
+- pages/10_📋_ログ・監視.py：
+  - 「イベント一覧」の下に「ログのエクスポート」セクションを追加
+  - 現在選択中のレベルフィルタに従った表示中のログをCSVダウンロード可能に
+  - st.download_buttonはSprint 7のレポートページと同じ使い方
+  - ログが0件のときはダウンロードボタンをdisabledにする
+  - 既存の削除機能・表示ロジックは変更しない
+
+設計:
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- history_manager.pyを変更しない
+- report_generator.pyを変更しない
+- security.pyを変更しない
+- comparison_engine.pyを変更しない
+- app_logger.pyの既存関数（log_event / load_events / clear_events）の
+  ロジック自体は変更せず、新規関数を追加するのみ
+
+テスト:
+python -m pytest -q
+62 passed（既存54件 + Sprint 11 8件）
+
+追加テスト（tests/test_app_logger.py）:
+- CSVヘッダー・行の出力確認
+- 空リスト時はヘッダーのみ
+- list以外の入力でValueError
+- dict以外の要素をスキップ
+- カンマ・引用符を含むメッセージの正しいエスケープ
+- ファイル名生成（デフォルト／レベル指定／不正なレベル指定時の無視）
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 📄 FIREレポート /
+   🔒 公開運用・セキュリティ / 📊 シミュレーション比較 / 📋 ログ・監視）
+2. 📋 ログ・監視ページで「📥 表示中のログをCSVでダウンロード」ボタンから
+   CSVファイルをダウンロードし、Excelで文字化けなく開けることを確認
+3. レベルフィルタ（ERROR/WARNING/INFO）を切り替えたとき、
+   ダウンロードされるCSVの内容とファイル名が連動することを確認
+4. python -m pytest -q
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 11 log CSV export"
+8. git push origin main（直接push不可のためbundle経由で反映）
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 12候補（未着手）
 - docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +9,7 @@ from pathlib import Path
 DEFAULT_LOG_PATH = ".fire_compass_events.log"
 DEFAULT_MAX_EVENTS = 500
 VALID_LEVELS = {"INFO", "WARNING", "ERROR"}
+CSV_FIELDNAMES = ["timestamp", "level", "event_type", "message"]
 
 
 def _read_entries(file_path: Path) -> list[dict]:
@@ -111,3 +114,50 @@ def clear_events(path: str | Path | None = None) -> None:
 
     if file_path.exists():
         file_path.unlink()
+
+
+def export_events_to_csv(events: list[dict]) -> str:
+    """イベント一覧をCSV文字列へ変換する。
+
+    金融計算やAIアドバイスのロジックには一切関与しない。
+    load_eventsの戻り値（timestamp / level / event_type / message）を
+    そのままCSVの列として書き出すだけの整形専用の関数。
+    """
+    if not isinstance(events, list):
+        raise ValueError("eventsはリスト形式で指定してください。")
+
+    buffer = io.StringIO()
+    # Excel（Windows）で文字化けしないよう、改行はCRLF・BOM付きUTF-8相当で出力する。
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=CSV_FIELDNAMES,
+        extrasaction="ignore",
+        lineterminator="\r\n",
+    )
+    writer.writeheader()
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        writer.writerow(
+            {
+                "timestamp": event.get("timestamp", ""),
+                "level": event.get("level", ""),
+                "event_type": event.get("event_type", ""),
+                "message": event.get("message", ""),
+            }
+        )
+
+    return "\ufeff" + buffer.getvalue()
+
+
+def events_export_filename(level: str | None = None) -> str:
+    """CSVダウンロード用のファイル名を生成する。"""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+    if level:
+        normalized = level.strip().upper()
+        if normalized in VALID_LEVELS:
+            return f"fire_compass_events_{normalized}_{timestamp}.csv"
+
+    return f"fire_compass_events_{timestamp}.csv"
