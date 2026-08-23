@@ -8,6 +8,7 @@ from services.action_engine import calculate_monthly_action
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
 from services.history_manager import (
+    clear_history,
     delete_history,
     load_history,
     save_history,
@@ -624,11 +625,7 @@ if history_records:
         "🗑️ 全履歴を削除",
         use_container_width=True,
     ):
-        history_path = Path(HISTORY_PATH)
-
-        if history_path.exists():
-            history_path.unlink()
-
+        clear_history(path=HISTORY_PATH)
         st.rerun()
 else:
     st.info("保存済み履歴はありません。")
