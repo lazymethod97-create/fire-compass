@@ -610,9 +610,85 @@ python -m pytest -q
 8. git push origin main（直接push不可のためbundle経由で反映）
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 16候補（未着手）
+## Sprint 16完了
+主要機能:
+保存済み履歴一覧のキーワード検索・作成日期間フィルタ。
+
+背景（調査結果）:
+- Sprint 13でログには「キーワード検索・期間フィルタ」を追加済みだが、
+  同じ課題（最大保存件数まで増えると目的のものを見つけにくい）は
+  履歴（Sprint 6）にも存在し、未対応のまま残っていた
+- 対象はhistory_manager.py（履歴機能）であり、Sprint 14で立てた
+  「ログ関連機能の拡張はSprint 17まで一旦停止」の対象
+  （app_logger.py／ログ機能）ではないため、その方針には反しない
+- 絞り込み結果はSprint 15のCSVエクスポートにも反映することとした
+  （きたさんの確認の上、pages/10のログページと同じ挙動に統一）
+
+追加・変更:
+- services/history_manager.py：
+  - filter_history(records, keyword, start_date, end_date) を追加
+    - app_logger.filter_events()（Sprint 13）と同じ設計方針
+    - keywordは履歴名（nameフィールド）への部分一致（大文字小文字を
+      区別しない）
+    - start_date / end_dateはcreated_atの日付部分（先頭10文字）で
+      期間を絞り込む（両端を含む）
+    - list以外が渡された場合はValueError、dict以外の要素は無視
+    - 既存のload_history / save_history / delete_history /
+      rename_history / clear_history / export_history_to_csvは
+      変更しない
+- app.py：
+  - 「保存済み履歴」セクションにキーワード検索欄・作成日（開始/終了）の
+    日付入力を追加
+  - filter_history()の結果を履歴カード一覧・CSVエクスポートの両方に適用
+  - 「絞り込み後の件数」を表示
+  - 絞り込み後の件数が0件のときはCSVダウンロードボタンをdisabledにする
+  - 既存の保存・名称変更・削除・全削除のロジックは変更しない
+
+設計:
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- report_generator.pyを変更しない
+- security.pyを変更しない
+- app_logger.pyを変更しない
+- comparison_engine.pyを変更しない
+- history_manager.pyの既存関数のロジック自体は変更せず、新規関数を
+  追加するのみ
+- 金融計算ロジックは一切追加していない（履歴一覧の絞り込み表示のみ）
+
+テスト:
+python -m pytest -q
+99 passed（既存91件 + Sprint 16 8件）
+
+追加テスト（tests/test_history_manager.py）:
+- filter_historyに非リストを渡した場合のValueError
+- キーワードによるname一致（大文字小文字区別なし）
+- キーワード空欄時は全件返却
+- 開始日のみ・終了日のみ・期間指定（両方）での絞り込み
+- キーワードと期間の組み合わせ絞り込み
+- dict以外の要素をスキップ
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 📄 FIREレポート /
+   🔒 公開運用・セキュリティ / 📊 シミュレーション比較 / 📋 ログ・監視）
+2. 履歴を複数件保存し、履歴名キーワード・作成日（開始/終了）で
+   絞り込んだ結果が一覧表示とCSVダウンロードの両方に反映されることを確認
+3. キーワード・期間を未入力にした場合、Sprint 15以前と同じ挙動
+   （全件表示・全件エクスポート）になることを確認
+4. python -m pytest -q
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 16 history keyword and date range filter"
+8. git push origin main（直接push不可のためbundle経由で反映）
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 17は定期レビュー（3Sprintごと・前回はSprint 14）
+次回のSprint開始時は、まず「機能の本当に役立っているか」定期レビューを
+実施すること（Sprint 10〜13のログ関連機能に加え、Sprint 15〜16で追加した
+履歴エクスポート・絞り込み機能も含めて、5つの観点で再評価する）。
+
+## Sprint 18候補（未着手・Sprint 17レビュー結果次第で変わる可能性あり）
 - docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理
 - JSONファイル保存方式（履歴・ログ）の運用限界の見直し（件数増加時の性能・移行含む）
-- ★次回レビュー（Sprint 17）まで、Sprint 10〜13で積み上がったログ関連の
-  機能拡張は一旦停止し、ユーザー向け価値（履歴・レポート・比較系）を
-  優先する

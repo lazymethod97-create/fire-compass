@@ -4,6 +4,7 @@ from services.history_manager import (
     clear_history,
     delete_history,
     export_history_to_csv,
+    filter_history,
     history_export_filename,
     load_history,
     rename_history,
@@ -165,6 +166,69 @@ def test_rename_history_requires_non_empty_name(tmp_path):
             "   ",
             path=history_path,
         )
+
+
+def _named_records():
+    return [
+        {"id": "1", "name": "楽観シナリオ試算", "created_at": "2026-08-01T09:00:00+00:00"},
+        {"id": "2", "name": "標準シナリオ試算", "created_at": "2026-08-10T09:00:00+00:00"},
+        {"id": "3", "name": "悲観シナリオ試算", "created_at": "2026-08-20T09:00:00+00:00"},
+    ]
+
+
+def test_filter_history_rejects_non_list_input():
+    with pytest.raises(ValueError):
+        filter_history({"not": "a list"})
+
+
+def test_filter_history_by_keyword_matches_name_case_insensitive():
+    result = filter_history(_named_records(), keyword="楽観")
+
+    assert [item["id"] for item in result] == ["1"]
+
+
+def test_filter_history_by_keyword_returns_all_when_blank():
+    result = filter_history(_named_records(), keyword="   ")
+
+    assert len(result) == 3
+
+
+def test_filter_history_by_start_date():
+    result = filter_history(_named_records(), start_date="2026-08-10")
+
+    assert [item["id"] for item in result] == ["2", "3"]
+
+
+def test_filter_history_by_end_date():
+    result = filter_history(_named_records(), end_date="2026-08-10")
+
+    assert [item["id"] for item in result] == ["1", "2"]
+
+
+def test_filter_history_by_date_range():
+    result = filter_history(
+        _named_records(), start_date="2026-08-05", end_date="2026-08-15"
+    )
+
+    assert [item["id"] for item in result] == ["2"]
+
+
+def test_filter_history_combines_keyword_and_date_range():
+    result = filter_history(
+        _named_records(),
+        keyword="シナリオ",
+        start_date="2026-08-15",
+    )
+
+    assert [item["id"] for item in result] == ["3"]
+
+
+def test_filter_history_skips_non_dict_records():
+    records = _named_records() + ["not-a-dict"]
+
+    result = filter_history(records)
+
+    assert len(result) == 3
 
 
 def _history_record(name, cash_months=24.0, action="追加投資"):

@@ -12,6 +12,7 @@ from services.history_manager import (
     clear_history,
     delete_history,
     export_history_to_csv,
+    filter_history,
     history_export_filename,
     load_history,
     rename_history,
@@ -604,7 +605,40 @@ if history_records:
         f"最大20件まで保存されます。現在 {len(history_records)} 件。"
     )
 
-    for index, record in enumerate(history_records):
+    history_keyword_filter = st.text_input(
+        "履歴名で検索",
+        value="",
+        placeholder="例: 楽観シナリオ",
+        key="history_keyword_filter",
+    )
+
+    history_date_col1, history_date_col2 = st.columns(2)
+    with history_date_col1:
+        history_start_date = st.date_input(
+            "作成日（開始・この日を含む）",
+            value=None,
+            key="history_start_date",
+        )
+    with history_date_col2:
+        history_end_date = st.date_input(
+            "作成日（終了・この日を含む）",
+            value=None,
+            key="history_end_date",
+        )
+
+    filtered_history_records = filter_history(
+        history_records,
+        keyword=history_keyword_filter,
+        start_date=str(history_start_date) if history_start_date else None,
+        end_date=str(history_end_date) if history_end_date else None,
+    )
+
+    st.caption(f"絞り込み後の件数: {len(filtered_history_records)}件")
+
+    if not filtered_history_records:
+        st.info("条件に一致する履歴はありません。")
+
+    for index, record in enumerate(filtered_history_records):
         record_id = record.get("id", "")
         results = record.get("results", {})
 
@@ -692,16 +726,18 @@ if history_records:
     st.markdown("### 履歴のエクスポート")
 
     st.caption(
-        "保存済み履歴（現在表示中の全件）をCSVでダウンロードできます。"
+        "検索・期間で絞り込んだ結果をCSVでダウンロードできます"
+        "（絞り込みが未入力の場合は全件が対象です）。"
         "20件の上限で古い履歴が消える前の保管用途にもご利用いただけます。"
     )
 
     st.download_button(
         label="📥 保存済み履歴をCSVでダウンロード",
-        data=export_history_to_csv(history_records),
+        data=export_history_to_csv(filtered_history_records),
         file_name=history_export_filename(),
         mime="text/csv",
         use_container_width=True,
+        disabled=not filtered_history_records,
     )
 
     if st.button(

@@ -242,6 +242,63 @@ def clear_history(
         file_path.unlink()
 
 
+def filter_history(
+    records: list[dict],
+    keyword: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """保存済み履歴一覧をキーワード・期間で絞り込む。
+
+    金融計算やAIアドバイスのロジックには一切関与しない、表示専用の絞り込み関数。
+    load_history()の戻り値（新しい順ソート済み）に対して追加で
+    キーワード検索・期間指定を適用することを想定している。
+    load_history / save_history / delete_history / rename_history /
+    clear_historyのロジックは変更しない。
+
+    app_logger.filter_events()（Sprint 13）と同じ設計方針。
+
+    Args:
+        records: load_history()等で取得した履歴のリスト。
+        keyword: 履歴名（nameフィールド）に部分一致（大文字小文字を
+            区別しない）するキーワード。空文字・Noneの場合は
+            キーワード絞り込みを行わない。
+        start_date: "YYYY-MM-DD"形式の開始日（この日を含む）。
+            created_atの日付部分（先頭10文字）と文字列比較する。
+        end_date: "YYYY-MM-DD"形式の終了日（この日を含む）。
+    """
+    if not isinstance(records, list):
+        raise ValueError("recordsはリスト形式で指定してください。")
+
+    filtered = [item for item in records if isinstance(item, dict)]
+
+    normalized_keyword = (keyword or "").strip().lower()
+    if normalized_keyword:
+        filtered = [
+            item
+            for item in filtered
+            if normalized_keyword in str(item.get("name", "")).lower()
+        ]
+
+    if start_date:
+        start_str = str(start_date)[:10]
+        filtered = [
+            item
+            for item in filtered
+            if str(item.get("created_at", ""))[:10] >= start_str
+        ]
+
+    if end_date:
+        end_str = str(end_date)[:10]
+        filtered = [
+            item
+            for item in filtered
+            if str(item.get("created_at", ""))[:10] <= end_str
+        ]
+
+    return filtered
+
+
 def export_history_to_csv(records: list[dict]) -> str:
     """保存済み履歴一覧をCSV文字列へ変換する。
 
