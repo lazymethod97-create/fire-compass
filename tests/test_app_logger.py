@@ -222,3 +222,96 @@ def test_events_export_filename_ignores_invalid_level():
 
     assert "not-a-real-level" not in filename
     assert filename.startswith("fire_compass_events_")
+
+
+def _sample_events():
+    return [
+        {
+            "timestamp": "2026-08-01T09:00:00+00:00",
+            "level": "INFO",
+            "event_type": "simulation_executed",
+            "message": "FIREシミュレーションを実行しました。",
+        },
+        {
+            "timestamp": "2026-08-10T09:00:00+00:00",
+            "level": "WARNING",
+            "event_type": "ai_advice_fallback",
+            "message": "APIキー未設定のためルールベースへフォールバックしました。",
+        },
+        {
+            "timestamp": "2026-08-20T09:00:00+00:00",
+            "level": "ERROR",
+            "event_type": "history_saved",
+            "message": "履歴の保存中に予期しないエラーが発生しました。",
+        },
+    ]
+
+
+def test_filter_events_rejects_non_list_input():
+    with pytest.raises(ValueError):
+        app_logger.filter_events({"not": "a list"})
+
+
+def test_filter_events_by_keyword_matches_event_type():
+    result = app_logger.filter_events(
+        _sample_events(), keyword="simulation_executed"
+    )
+
+    assert [item["event_type"] for item in result] == ["simulation_executed"]
+
+
+def test_filter_events_by_keyword_matches_message_case_insensitive():
+    result = app_logger.filter_events(_sample_events(), keyword="フォールバック")
+
+    assert [item["event_type"] for item in result] == ["ai_advice_fallback"]
+
+
+def test_filter_events_by_keyword_returns_all_when_blank():
+    result = app_logger.filter_events(_sample_events(), keyword="   ")
+
+    assert len(result) == 3
+
+
+def test_filter_events_by_start_date():
+    result = app_logger.filter_events(_sample_events(), start_date="2026-08-10")
+
+    assert [item["event_type"] for item in result] == [
+        "ai_advice_fallback",
+        "history_saved",
+    ]
+
+
+def test_filter_events_by_end_date():
+    result = app_logger.filter_events(_sample_events(), end_date="2026-08-10")
+
+    assert [item["event_type"] for item in result] == [
+        "simulation_executed",
+        "ai_advice_fallback",
+    ]
+
+
+def test_filter_events_by_date_range():
+    result = app_logger.filter_events(
+        _sample_events(), start_date="2026-08-05", end_date="2026-08-15"
+    )
+
+    assert [item["event_type"] for item in result] == ["ai_advice_fallback"]
+
+
+def test_filter_events_combines_keyword_and_date_range():
+    result = app_logger.filter_events(
+        _sample_events(),
+        keyword="error",
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+    )
+
+    assert result == []
+
+
+def test_filter_events_skips_non_dict_items():
+    result = app_logger.filter_events(
+        [_sample_events()[0], "not-a-dict"], keyword="simulation"
+    )
+
+    assert len(result) == 1

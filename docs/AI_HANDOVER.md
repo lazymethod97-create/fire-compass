@@ -382,7 +382,69 @@ python -m pytest -q
 8. git push origin main（直接push不可のためbundle経由で反映）
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 13候補（未着手）
+## Sprint 13完了
+主要機能:
+ログのキーワード検索・期間（日付範囲）フィルタ機能。
+
+背景（調査結果）:
+- Sprint 11・Sprint 12のAI_HANDOVER.mdの両方で「ログ検索性、期間指定など」が
+  未着手候補として繰り返し記録されていた
+- 現状の「📋 ログ・監視」ページはレベル（INFO/WARNING/ERROR）でしか絞り込めず、
+  ログが増えるほど目的のイベントを見つけにくいという運用課題が残っていた
+
+追加・変更:
+- services/app_logger.py：
+  - filter_events(events, keyword, start_date, end_date) を追加
+    - event_type / messageへのキーワード部分一致（大文字小文字を区別しない）
+    - timestampの日付部分（YYYY-MM-DD）による期間絞り込み（開始日・終了日を含む）
+    - load_events()の戻り値に対して追加で適用する表示専用の絞り込み関数
+    - 既存のlog_event / load_events / clear_events / export_events_to_csvは変更しない
+- pages/10_📋_ログ・監視.py：
+  - レベル選択の下にキーワード検索欄・開始日/終了日の日付入力を追加
+  - load_events()の結果にfilter_events()を適用してから一覧表示・CSV出力に利用
+  - 「絞り込み後の件数」を表示
+  - 既存の削除機能・CSVエクスポート機能（Sprint 11）の枠組みは変更しない
+
+設計:
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- history_manager.pyを変更しない
+- report_generator.pyを変更しない
+- security.pyを変更しない
+- comparison_engine.pyを変更しない
+- app_logger.pyの既存関数（log_event / load_events / clear_events /
+  export_events_to_csv）のロジック自体は変更せず、新規関数を追加するのみ
+- 金融計算ロジックは一切追加していない（ログの絞り込み表示のみ）
+
+テスト:
+python -m pytest -q
+79 passed（既存70件 + Sprint 13 9件）
+
+追加テスト（tests/test_app_logger.py）:
+- filter_eventsに非リストを渡した場合のValueError
+- キーワードによるevent_type一致・message一致（大文字小文字区別なし）
+- キーワード空欄時は全件返却
+- 開始日のみ・終了日のみ・期間指定（両方）での絞り込み
+- キーワードと期間の組み合わせ絞り込み
+- dict以外の要素をスキップ
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 📄 FIREレポート /
+   🔒 公開運用・セキュリティ / 📊 シミュレーション比較 / 📋 ログ・監視）
+2. 📋 ログ・監視ページでキーワード検索・開始日/終了日を入力し、
+   一覧表示とCSVダウンロードの両方に絞り込みが反映されることを確認
+3. キーワード・期間を未入力にした場合、Sprint 11以前と同じ挙動（レベルのみで絞り込み）になることを確認
+4. python -m pytest -q
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 13 log keyword and date range filter"
+8. git push origin main（直接push不可のためbundle経由で反映）
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 14候補（未着手）
 - docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理
-- JSONファイル保存方式（履歴・ログ）の運用限界の見直し
-- ログの期間指定・検索機能
+- JSONファイル保存方式（履歴・ログ）の運用限界の見直し（件数増加時の性能・移行含む）
+- 履歴（Sprint 6）の保存後の名称変更機能

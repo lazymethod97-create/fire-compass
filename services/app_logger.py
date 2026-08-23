@@ -108,6 +108,60 @@ def load_events(
     return entries[:limit]
 
 
+def filter_events(
+    events: list[dict],
+    keyword: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """イベント一覧をキーワード・期間で絞り込む。
+
+    金融計算やAIアドバイスのロジックには一切関与しない、表示専用の絞り込み関数。
+    load_events()の戻り値（レベル絞り込み・新しい順ソート済み）に対して
+    追加でキーワード検索・期間指定を適用することを想定している。
+    log_event / load_events / clear_eventsのロジックは変更しない。
+
+    Args:
+        events: load_events()等で取得したイベントのリスト。
+        keyword: event_typeまたはmessageに部分一致（大文字小文字を区別しない）
+            するキーワード。空文字・Noneの場合はキーワード絞り込みを行わない。
+        start_date: "YYYY-MM-DD"形式の開始日（この日を含む）。
+            timestampの先頭10文字（日付部分）と文字列比較する。
+        end_date: "YYYY-MM-DD"形式の終了日（この日を含む）。
+    """
+    if not isinstance(events, list):
+        raise ValueError("eventsはリスト形式で指定してください。")
+
+    filtered = [event for event in events if isinstance(event, dict)]
+
+    normalized_keyword = (keyword or "").strip().lower()
+    if normalized_keyword:
+        filtered = [
+            event
+            for event in filtered
+            if normalized_keyword in str(event.get("event_type", "")).lower()
+            or normalized_keyword in str(event.get("message", "")).lower()
+        ]
+
+    if start_date:
+        start_str = str(start_date)[:10]
+        filtered = [
+            event
+            for event in filtered
+            if str(event.get("timestamp", ""))[:10] >= start_str
+        ]
+
+    if end_date:
+        end_str = str(end_date)[:10]
+        filtered = [
+            event
+            for event in filtered
+            if str(event.get("timestamp", ""))[:10] <= end_str
+        ]
+
+    return filtered
+
+
 def clear_events(path: str | Path | None = None) -> None:
     """記録済みのログファイルを削除する。"""
     file_path = Path(path or DEFAULT_LOG_PATH)

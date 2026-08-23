@@ -6,6 +6,7 @@ from services.app_logger import (
     clear_events,
     events_export_filename,
     export_events_to_csv,
+    filter_events,
     load_events,
 )
 
@@ -37,9 +38,36 @@ level_filter = st.selectbox(
 
 selected_level = None if level_filter == "すべて" else level_filter
 
+keyword_filter = st.text_input(
+    "キーワード検索（イベント種別・メッセージを対象）",
+    value="",
+    placeholder="例: simulation_executed / フォールバック",
+)
+
+date_col1, date_col2 = st.columns(2)
+with date_col1:
+    start_date = st.date_input(
+        "開始日（この日を含む）",
+        value=None,
+        key="log_start_date",
+    )
+with date_col2:
+    end_date = st.date_input(
+        "終了日（この日を含む）",
+        value=None,
+        key="log_end_date",
+    )
+
 events = load_events(
     path=EVENT_LOG_PATH,
     level=selected_level,
+)
+
+events = filter_events(
+    events,
+    keyword=keyword_filter,
+    start_date=str(start_date) if start_date else None,
+    end_date=str(end_date) if end_date else None,
 )
 
 all_events = load_events(path=EVENT_LOG_PATH)
@@ -54,6 +82,7 @@ c3.metric("🟡 警告", warning_count)
 c4.metric("🟢 情報", info_count)
 
 st.subheader("イベント一覧")
+st.caption(f"絞り込み後の件数: {len(events)}件")
 
 if not events:
     st.info("表示できるログはまだありません。")
@@ -71,7 +100,8 @@ st.divider()
 
 st.subheader("ログのエクスポート")
 st.write(
-    "現在表示中のレベルのログを、Excel等で開けるCSVファイルとしてダウンロードできます。"
+    "現在表示中の絞り込み結果（レベル・キーワード・期間）のログを、"
+    "Excel等で開けるCSVファイルとしてダウンロードできます。"
 )
 
 csv_data = export_events_to_csv(events)
