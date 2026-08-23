@@ -1,6 +1,8 @@
 import os
 from typing import Any
 
+from services.app_logger import log_event
+from services.security import safe_error_message
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -141,6 +143,11 @@ def generate_ai_advice(
     api_key = os.getenv("GEMINI_API_KEY")
 
     if not api_key:
+        log_event(
+            "ai_advice_fallback",
+            "GEMINI_API_KEY未設定のため、ルールベースのアドバイスへフォールバックしました。",
+            level="INFO",
+        )
         return fallback
 
     try:
@@ -165,7 +172,18 @@ def generate_ai_advice(
         if text and text.strip():
             return text.strip()
 
+        log_event(
+            "ai_advice_fallback",
+            "Gemini APIから空の応答を受け取ったため、ルールベースへフォールバックしました。",
+            level="WARNING",
+        )
         return fallback
 
-    except Exception:
+    except Exception as error:
+        log_event(
+            "ai_advice_fallback",
+            "Gemini API呼び出しでエラーが発生したため、ルールベースへフォールバックしました。"
+            f" 詳細: {safe_error_message(error)}",
+            level="ERROR",
+        )
         return fallback

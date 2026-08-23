@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from services import app_logger
 from services.ai_advisor import generate_ai_advice
 
 
@@ -43,8 +44,9 @@ def _make_inputs():
     return fire_result, strategy
 
 
-def test_fallback_when_api_key_is_missing(monkeypatch):
+def test_fallback_when_api_key_is_missing(monkeypatch, tmp_path):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     fire_result, strategy = _make_inputs()
 
@@ -62,8 +64,9 @@ def test_fallback_when_api_key_is_missing(monkeypatch):
     assert "追加投資" in result
 
 
-def test_fallback_contains_core_financial_information(monkeypatch):
+def test_fallback_contains_core_financial_information(monkeypatch, tmp_path):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     fire_result, strategy = _make_inputs()
 
@@ -79,3 +82,67 @@ def test_fallback_contains_core_financial_information(monkeypatch):
     assert "164" in result
     assert "投資資産から現金を補充" in result
     assert "目標現金" in result
+
+
+def test_logs_info_event_when_api_key_missing(monkeypatch, tmp_path):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    fire_result, strategy = _make_inputs()
+
+    generate_ai_advice(
+        fire_result=fire_result,
+        market_condition="通常",
+        strategy=strategy,
+        recommended_action="追加投資",
+        additional_investment=100.0,
+        investment_withdrawal=0.0,
+    )
+
+    events = app_logger.load_events(path=".fire_compass_events.log")
+
+    assert any(
+        event["event_type"] == "ai_advice_fallback" and event["level"] == "INFO"
+        for event in events
+    )
+
+
+def test_logs_error_event_when_gemini_call_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy-key")
+    monkeypatch.chdir(tmp_path)
+
+    from google import genai
+
+    class RaisingClient:
+        def __init__(self, api_key):
+            pass
+
+        class models:
+            @staticmethod
+            def generate_content(model, contents):
+                raise RuntimeError("network unavailable, key=super-secret")
+
+    monkeypatch.setattr(genai, "Client", RaisingClient)
+
+    fire_result, strategy = _make_inputs()
+
+    result = generate_ai_advice(
+        fire_result=fire_result,
+        market_condition="通常",
+        strategy=strategy,
+        recommended_action="追加投資",
+        additional_investment=100.0,
+        investment_withdrawal=0.0,
+    )
+
+    assert "AI FIREアドバイス" in result
+
+    events = app_logger.load_events(path=".fire_compass_events.log")
+    error_events = [
+        event
+        for event in events
+        if event["event_type"] == "ai_advice_fallback" and event["level"] == "ERROR"
+    ]
+
+    assert len(error_events) == 1
+    assert "super-secret" not in error_events[0]["message"]

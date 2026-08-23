@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 from services.ai_advisor import generate_ai_advice
 from services.action_engine import calculate_monthly_action
+from services.app_logger import log_event
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
 from services.history_manager import (
@@ -17,12 +18,26 @@ from services.tax_optimization import TaxOptimizationInput, run_tax_optimization
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
+EVENT_LOG_PATH = os.path.join(BASE_DIR, ".fire_compass_events.log")
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 st.set_page_config(
     page_title="FIRE Compass",
     page_icon="🧭",
     layout="wide",
 )
+
+def _safe_log_event(event_type: str, message: str, level: str = "INFO") -> None:
+    """イベントログの記録に失敗しても、アプリ本体の動作は止めない。"""
+    try:
+        log_event(
+            event_type,
+            message,
+            level=level,
+            path=EVENT_LOG_PATH,
+        )
+    except Exception:
+        pass
+
 
 st.title("🧭 FIRE Compass")
 st.caption("FIRE後の生活費・資産寿命・取り崩し余力をシミュレーションするアプリ")
@@ -388,6 +403,11 @@ if run:
         "年金は65〜75歳の受給開始年齢を入力し、開始後の生活費不足額を表示します。"
     )
 
+    _safe_log_event(
+        "simulation_executed",
+        f"FIREシミュレーションを実行しました（市場環境: {market_condition}）。",
+    )
+
     st.session_state["latest_simulation"] = {
         "name": "FIREシミュレーション",
         "inputs": {
@@ -555,6 +575,11 @@ if latest_simulation:
             path=HISTORY_PATH,
         )
 
+        _safe_log_event(
+            "history_saved",
+            f"シミュレーション結果を履歴に保存しました（名称: {record['name']}）。",
+        )
+
         st.success(
             f"「{record['name']}」を履歴に保存しました。"
         )
@@ -619,6 +644,10 @@ if history_records:
                         record_id,
                         path=HISTORY_PATH,
                     )
+                    _safe_log_event(
+                        "history_deleted",
+                        "履歴を1件削除しました。",
+                    )
                     st.rerun()
 
     if st.button(
@@ -626,6 +655,10 @@ if history_records:
         use_container_width=True,
     ):
         clear_history(path=HISTORY_PATH)
+        _safe_log_event(
+            "history_cleared",
+            "保存済みの履歴をすべて削除しました。",
+        )
         st.rerun()
 else:
     st.info("保存済み履歴はありません。")

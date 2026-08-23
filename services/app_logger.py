@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+DEFAULT_LOG_PATH = ".fire_compass_events.log"
+DEFAULT_MAX_EVENTS = 500
+VALID_LEVELS = {"INFO", "WARNING", "ERROR"}
+
+
+def _read_entries(file_path: Path) -> list[dict]:
+    if not file_path.exists():
+        return []
+
+    try:
+        raw_text = file_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    entries: list[dict] = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            entries.append(parsed)
+
+    return entries
+
+
+def log_event(
+    event_type: str,
+    message: str,
+    level: str = "INFO",
+    path: str | Path | None = None,
+    max_events: int = DEFAULT_MAX_EVENTS,
+) -> dict | None:
+    """アプリの動作イベント・エラーをローカルのログファイルへ記録する。
+
+    金融計算やAIアドバイスのロジックには一切関与しない。
+    ログの記録に失敗しても例外を外部へ送出せず、アプリ本体の動作を止めない。
+    """
+    if not event_type:
+        raise ValueError("event_typeは必須です。")
+
+    if max_events <= 0:
+        raise ValueError("max_eventsは1以上にしてください。")
+
+    normalized_level = (level or "INFO").strip().upper()
+    if normalized_level not in VALID_LEVELS:
+        normalized_level = "INFO"
+
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "level": normalized_level,
+        "event_type": str(event_type),
+        # APIキー等の秘密値が誤って渡された場合の被害を抑えるため、長さを制限する。
+        "message": str(message)[:500],
+    }
+
+    file_path = Path(path or DEFAULT_LOG_PATH)
+
+    try:
+        events = _read_entries(file_path)
+        events.append(entry)
+        events = events[-max_events:]
+
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(
+            "\n".join(json.dumps(item, ensure_ascii=False) for item in events)
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return None
+
+    return entry
+
+
+def load_events(
+    path: str | Path | None = None,
+    limit: int = DEFAULT_MAX_EVENTS,
+    level: str | None = None,
+) -> list[dict]:
+    """記録済みのイベントを新しい順に返す。"""
+    if limit <= 0:
+        raise ValueError("limitは1以上にしてください。")
+
+    file_path = Path(path or DEFAULT_LOG_PATH)
+    entries = _read_entries(file_path)
+
+    if level:
+        normalized = level.strip().upper()
+        entries = [item for item in entries if item.get("level") == normalized]
+
+    # ファイルには記録した順（古い→新しい）で保存されているため、
+    # そのまま反転すれば「同一秒内の複数イベント」でも新しい順になる。
+    entries = list(reversed(entries))
+
+    return entries[:limit]
+
+
+def clear_events(path: str | Path | None = None) -> None:
+    """記録済みのログファイルを削除する。"""
+    file_path = Path(path or DEFAULT_LOG_PATH)
+
+    if file_path.exists():
+        file_path.unlink()

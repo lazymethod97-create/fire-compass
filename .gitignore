@@ -5,3 +5,5 @@ __pycache__/
 .fire_compass_history.json
 .env
 .fire_compass_history_*.json
+.fire_compass_events.log
+.fire_compass_events_*.log

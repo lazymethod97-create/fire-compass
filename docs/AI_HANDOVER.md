@@ -1,7 +1,7 @@
 ﻿# AI HANDOVER
 
 ## 現在地
-FIRE Compass Sprint 9 実装。
+FIRE Compass Sprint 10 実装。
 
 ## GitHub
 Source of Truth:
@@ -193,6 +193,68 @@ python -m pytest -q
 8. git push origin main
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 10候補（未着手）
-- 監視・ログ機能の強化（アクセスログ、エラーログの外部連携）
-- docs/ROADMAP.mdのSprint 8欄の文字化け修正（別Sprintでの軽微修正候補）
+## Sprint 10完了
+主要機能:
+アプリケーションのイベント・エラーログ機能。
+
+追加:
+- services/app_logger.py
+- tests/test_app_logger.py
+- pages/10_📋_ログ・監視.py
+
+設計:
+- Sprint 1〜9の調査の結果、監視・ログ機能が一切存在せず、
+  特にGemini APIエラー時（services/ai_advisor.pyのexcept節）に
+  失敗理由が記録されない点が最大の運用課題だと判明した
+- services/app_logger.pyでイベントをJSON Lines形式でローカルファイル
+  （.fire_compass_events.log）へ記録
+- 最大500件を超えた古い記録は自動的に切り捨てる（history_manager.pyの
+  最大件数管理と同じ考え方）
+- ログファイルはGit管理対象外（.gitignoreへ追加）
+- 外部送信は一切行わない（Sprint 8のセキュリティ方針を継続）
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- history_manager.pyのロジック本体を変更しない
+- report_generator.pyを変更しない
+- comparison_engine.pyを変更しない
+- security.pyを変更しない（safe_error_messageをそのまま再利用）
+
+最小限の既存ファイル変更（ロジックは変更せず、ログ記録の呼び出しのみ追加）:
+- services/ai_advisor.py：
+  - APIキー未設定時 → INFOログ
+  - Gemini APIから空応答を受け取った時 → WARNINGログ
+  - Gemini API呼び出しで例外発生時 → ERRORログ
+    （safe_error_messageで安全な文言に変換してから記録し、
+    APIキー等の秘密値は記録しない）
+  - フォールバックの文章・戻り値・プロンプト内容は一切変更していない
+- app.py：
+  - シミュレーション実行成功時 → simulation_executedイベント
+  - 履歴保存時 → history_savedイベント
+  - 履歴の個別削除時 → history_deletedイベント
+  - 履歴の全削除時 → history_clearedイベント
+  - すべて_safe_log_event()でtry/exceptに包み、ログ記録の失敗が
+    アプリ本体の動作へ影響しないようにしている
+
+テスト:
+python -m pytest -q
+54 passed（既存41件 + Sprint 10 13件）
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 📄 FIREレポート /
+   🔒 公開運用・セキュリティ / 📊 シミュレーション比較 / 📋 ログ・監視）
+2. シミュレーションを実行し、📋 ログ・監視ページにsimulation_executed
+   イベントが記録されることを確認
+3. GEMINI_API_KEYを設定せずにシミュレーションを実行し、
+   ai_advice_fallback（INFO）が記録されることを確認
+4. python -m pytest -q
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 10 application event and error logging"
+8. git push origin main
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 11候補（未着手）
+- ログ・監視ページからのログエクスポート（CSVダウンロード等）
+- docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理
