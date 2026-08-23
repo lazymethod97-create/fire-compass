@@ -122,7 +122,23 @@ UI改善・レポート出力 — 完了
 - 金融計算ロジック・AIアドバイスの生成内容は変更しない
 - テスト84件すべて成功（既存79件 + Sprint 14 5件）
 
-## Sprint 15候補
+## Sprint 15
+保存済み履歴一覧のCSVエクスポート — 完了
+
+- 「🧭 FIRE Compass」画面の「保存・履歴管理」に、保存済み履歴一覧を
+  CSVでダウンロードするボタンを追加
+- services/history_manager.pyへexport_history_to_csv() /
+  history_export_filename() を追加（既存のload_history / save_history /
+  delete_history / rename_history / clear_historyは変更しない）
+- 列の指標名・単位はcomparison_engine.METRIC_DEFSを再利用し、比較ページと
+  表記を揃えた
+- Excel（Windows）で文字化けしないよう、UTF-8 BOM付き・CRLF区切りで出力
+- 最大20件で古い履歴が自動的に消える前に、手元へ保存しておく手段として
+  JSON保存方式自体の見直しをせずに運用課題を緩和
+- 金融計算ロジック・AIアドバイスの生成内容は変更しない
+- テスト91件すべて成功（既存84件 + Sprint 15 7件）
+
+## Sprint 16候補
 - ドキュメントの表記統一（各docsファイルの見出し・記法の軽微な整理）
 - JSONファイル保存方式（履歴・ログ）の運用限界の見直し
 - 次回レビュー（Sprint 17）まで、ログ関連機能の新規拡張は一旦停止し

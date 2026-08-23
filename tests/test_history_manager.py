@@ -3,6 +3,8 @@
 from services.history_manager import (
     clear_history,
     delete_history,
+    export_history_to_csv,
+    history_export_filename,
     load_history,
     rename_history,
     save_history,
@@ -163,6 +165,82 @@ def test_rename_history_requires_non_empty_name(tmp_path):
             "   ",
             path=history_path,
         )
+
+
+def _history_record(name, cash_months=24.0, action="追加投資"):
+    return {
+        "name": name,
+        "created_at": "2026-08-21T12:00:00+00:00",
+        "results": {
+            "asset_depletion_label": "余裕あり",
+            "net_annual_spending": 180.0,
+            "recommended_monthly_spending": 13.5,
+            "cash_months": cash_months,
+            "target_cash": 180.0,
+            "additional_investment": 0.0,
+            "investment_withdrawal": 0.0,
+            "recommended_action": action,
+            "pension_gap_after_start": 20.0,
+            "nisa_remaining_limit": 1200.0,
+            "nisa_growth_remaining_limit": 900.0,
+            "nisa_annual_room": 200.0,
+            "ideco_annual_contribution": 12.0,
+        },
+    }
+
+
+def test_export_history_to_csv_contains_header_and_bom():
+    csv_text = export_history_to_csv(
+        [_history_record("A"), _history_record("B", cash_months=36.0)]
+    )
+
+    assert csv_text.startswith("\ufeff")
+    assert "履歴名,実行日時" in csv_text
+    assert "現金生活費（か月）" in csv_text
+    assert "\r\n" in csv_text
+
+
+def test_export_history_to_csv_includes_record_values():
+    csv_text = export_history_to_csv([_history_record("Aさん", cash_months=24.0)])
+
+    assert "Aさん,2026-08-21T12:00:00+00:00" in csv_text
+    assert "24.0か月" in csv_text
+    assert "追加投資" in csv_text
+
+
+def test_export_history_to_csv_handles_missing_results():
+    csv_text = export_history_to_csv([{"name": "結果なし"}])
+
+    assert "結果なし" in csv_text
+    assert "---" in csv_text
+
+
+def test_export_history_to_csv_skips_non_dict_records():
+    csv_text = export_history_to_csv([_history_record("A"), "not-a-dict"])
+
+    lines = [line for line in csv_text.splitlines() if line]
+    # ヘッダー1行 + 有効なレコード1行のみ
+    assert len(lines) == 2
+
+
+def test_export_history_to_csv_empty_list_returns_header_only():
+    csv_text = export_history_to_csv([])
+
+    lines = [line for line in csv_text.splitlines() if line]
+    assert len(lines) == 1
+    assert lines[0].startswith("\ufeff履歴名,実行日時")
+
+
+def test_export_history_to_csv_rejects_non_list_input():
+    with pytest.raises(ValueError):
+        export_history_to_csv({"not": "a list"})
+
+
+def test_history_export_filename_has_expected_prefix_and_extension():
+    filename = history_export_filename()
+
+    assert filename.startswith("fire_compass_history_")
+    assert filename.endswith(".csv")
 
 
 def test_clear_history(tmp_path):

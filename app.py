@@ -11,6 +11,8 @@ from services.fire_engine import FireInput, run_fire_simulation
 from services.history_manager import (
     clear_history,
     delete_history,
+    export_history_to_csv,
+    history_export_filename,
     load_history,
     rename_history,
     save_history,
@@ -686,6 +688,21 @@ if history_records:
                         "履歴を1件削除しました。",
                     )
                     st.rerun()
+
+    st.markdown("### 履歴のエクスポート")
+
+    st.caption(
+        "保存済み履歴（現在表示中の全件）をCSVでダウンロードできます。"
+        "20件の上限で古い履歴が消える前の保管用途にもご利用いただけます。"
+    )
+
+    st.download_button(
+        label="📥 保存済み履歴をCSVでダウンロード",
+        data=export_history_to_csv(history_records),
+        file_name=history_export_filename(),
+        mime="text/csv",
+        use_container_width=True,
+    )
 
     if st.button(
         "🗑️ 全履歴を削除",

@@ -533,7 +533,84 @@ python -m pytest -q
 8. git push origin main（直接push不可のためbundle経由で反映）
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 15候補（未着手）
+## Sprint 15完了
+主要機能:
+保存済み履歴一覧のCSVエクスポート。
+
+背景（調査結果）:
+- Sprint 11（ログCSV）・Sprint 12（比較結果CSV）で既にCSVエクスポートが
+  あるが、アプリの中核データであるSprint 6の「保存済み履歴」自体には
+  エクスポート手段が一つもなかった
+- 履歴は最大20件までしか保持できない仕様（Sprint 6以来）であり、
+  上限を超えて古い履歴が自動的に消える前に、手元へ保存しておく手段が
+  なかった。JSON保存方式自体の見直し（Sprint 14で時期尚早と判断）を
+  行わなくても、エクスポート機能があればこの懸念を実務的に緩和できる
+- Sprint 14の「ログ関連機能の拡張はSprint 17まで一旦停止」という方針の
+  対象はapp_logger.py（ログ機能）であり、history_manager.py（履歴機能）は
+  対象外のため、この方針には反しない
+- ドキュメント表記統一は優先度が低いため見送った
+
+追加・変更:
+- services/history_manager.py：
+  - export_history_to_csv(records) を追加
+    - Sprint 11のapp_logger.export_events_to_csv、Sprint 12の
+      comparison_engine.export_comparison_to_csvと同じ方針
+      （UTF-8 BOM付き・CRLF区切りでExcel文字化け対策）
+    - 列の指標名・単位はcomparison_engine.METRIC_DEFSをそのまま再利用し、
+      比較ページと同じ表記に揃えた（指標一覧の重複を作らない）
+    - list以外が渡された場合はValueError、dict以外の要素は無視
+    - resultsが欠けている履歴は「---」で表示
+  - history_export_filename() を追加
+    - ダウンロード用ファイル名（fire_compass_history_日時.csv）を生成
+  - 既存のload_history / save_history / delete_history /
+    rename_history / clear_historyは変更しない
+- app.py：
+  - 「11. 保存・履歴管理」セクションの履歴一覧下に
+    「📥 保存済み履歴をCSVでダウンロード」ボタンを追加
+  - 既存の保存・名称変更・削除・全削除のロジックは変更しない
+
+設計:
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- report_generator.pyを変更しない
+- security.pyを変更しない
+- app_logger.pyを変更しない
+- comparison_engine.pyを変更しない（METRIC_DEFS / format_comparison_valueを
+  読み取り専用でimportして再利用するのみ）
+- history_manager.pyの既存関数のロジック自体は変更せず、新規関数を
+  追加するのみ
+- 金融計算ロジックは一切追加していない（履歴一覧の整形・出力のみ）
+
+テスト:
+python -m pytest -q
+91 passed（既存84件 + Sprint 15 7件）
+
+追加テスト（tests/test_history_manager.py）:
+- CSVヘッダー・BOM・指標名の出力確認
+- 履歴名・実行日時・指標値が正しく出力されること
+- resultsが欠けている履歴が「---」で出力されること
+- dict以外の要素をスキップすること
+- 空リスト時はヘッダーのみ
+- list以外の入力でValueError
+- ファイル名生成（プレフィックス・拡張子）
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 📄 FIREレポート /
+   🔒 公開運用・セキュリティ / 📊 シミュレーション比較 / 📋 ログ・監視）
+2. 履歴を1件以上保存し、「📥 保存済み履歴をCSVでダウンロード」ボタンから
+   CSVファイルをダウンロードし、Excelで文字化けなく開けることを確認
+3. 履歴が0件の場合はダウンロードセクション自体が表示されないことを確認
+4. python -m pytest -q
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 15 history CSV export"
+8. git push origin main（直接push不可のためbundle経由で反映）
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 16候補（未着手）
 - docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理
 - JSONファイル保存方式（履歴・ログ）の運用限界の見直し（件数増加時の性能・移行含む）
 - ★次回レビュー（Sprint 17）まで、Sprint 10〜13で積み上がったログ関連の

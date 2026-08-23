@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+
+from services.comparison_engine import METRIC_DEFS, format_comparison_value
 
 DEFAULT_HISTORY_PATH = ".fire_compass_history.json"
 DEFAULT_MAX_RECORDS = 20
@@ -236,3 +240,55 @@ def clear_history(
 
     if file_path is not None and file_path.exists():
         file_path.unlink()
+
+
+def export_history_to_csv(records: list[dict]) -> str:
+    """保存済み履歴一覧をCSV文字列へ変換する。
+
+    Sprint 11のapp_logger.export_events_to_csv、Sprint 12の
+    comparison_engine.export_comparison_to_csvと同じ方針で、
+    Excel（Windows）で文字化けしないようUTF-8 BOM付き・CRLF区切りで出力する。
+    金融計算やAIアドバイスのロジックには一切関与しない、表示専用の整形関数。
+
+    列の定義（指標名・単位）はcomparison_engine.METRIC_DEFSをそのまま再利用し、
+    比較ページと同じ指標名・単位表記になるようにしている
+    （重複した指標一覧を持たない）。diff（差分）は履歴一覧全体が対象のため
+    算出せず、値のみを表示用に整形する。
+    """
+    if not isinstance(records, list):
+        raise ValueError("recordsはリスト形式で指定してください。")
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\r\n")
+
+    header = ["履歴名", "実行日時"] + [
+        f"{label}（{unit}）" if unit else label for _, label, unit in METRIC_DEFS
+    ]
+    writer.writerow(header)
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+
+        results = record.get("results", {})
+        if not isinstance(results, dict):
+            results = {}
+
+        row = [
+            record.get("name", "名称未設定"),
+            record.get("created_at", "日時不明"),
+        ]
+
+        for key, _, unit in METRIC_DEFS:
+            value = results.get(key)
+            row.append(format_comparison_value(value, None, unit))
+
+        writer.writerow(row)
+
+    return "\ufeff" + buffer.getvalue()
+
+
+def history_export_filename() -> str:
+    """履歴一覧CSVダウンロード用のファイル名を生成する。"""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"fire_compass_history_{timestamp}.csv"
