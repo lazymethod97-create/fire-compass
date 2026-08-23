@@ -2,7 +2,14 @@ import os
 
 import streamlit as st
 
-from services.comparison_engine import MAX_RECORDS, MIN_RECORDS, build_comparison
+from services.comparison_engine import (
+    MAX_RECORDS,
+    MIN_RECORDS,
+    build_comparison,
+    comparison_export_filename,
+    export_comparison_to_csv,
+    format_comparison_value,
+)
 from services.history_manager import load_history
 from services.security import safe_error_message
 
@@ -77,20 +84,10 @@ table_divider = "|---|" + "---|" * len(comparison.names)
 table_rows = []
 
 for row in comparison.rows:
-    cells = []
-    for value, diff in zip(row.values, row.diffs):
-        if value is None:
-            display = "---"
-        elif isinstance(value, (int, float)) and not isinstance(value, bool):
-            display = f"{value:,.1f}{row.unit}"
-        else:
-            display = f"{value}{row.unit}"
-
-        if diff is not None and diff != 0:
-            sign = "+" if diff > 0 else ""
-            display += f"（{sign}{diff:,.1f}）"
-
-        cells.append(display)
+    cells = [
+        format_comparison_value(value, diff, row.unit)
+        for value, diff in zip(row.values, row.diffs)
+    ]
 
     table_rows.append(f"| {row.label} | " + " | ".join(cells) + " |")
 
@@ -98,6 +95,21 @@ st.markdown("\n".join([table_header, table_divider, *table_rows]))
 
 st.caption(
     f"（）内の差分は、先頭の「{comparison.names[0]}」を基準にした差です。"
+)
+
+st.divider()
+
+st.subheader("比較結果のエクスポート")
+st.write(
+    "この比較表を、Excel等で開けるCSVファイルとしてダウンロードできます。"
+)
+
+st.download_button(
+    label="📥 比較結果をCSVでダウンロード",
+    data=export_comparison_to_csv(comparison),
+    file_name=comparison_export_filename(),
+    mime="text/csv",
+    use_container_width=True,
 )
 
 st.info(

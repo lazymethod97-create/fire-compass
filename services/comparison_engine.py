@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
+import io
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 MIN_RECORDS = 2
@@ -93,3 +96,57 @@ def build_comparison(records: list[dict]) -> ComparisonResult:
         created_ats=created_ats,
         rows=rows,
     )
+
+
+def format_comparison_value(value: Any, diff: float | None, unit: str) -> str:
+    """比較テーブルの1セルを表示用文字列に整形する。
+
+    pages/9_📊_シミュレーション比較.pyとCSVエクスポートの両方から
+    同じ整形ロジックを利用するための共通関数（表示の整形のみで、
+    金融計算は一切行わない）。
+    """
+    if value is None:
+        display = "---"
+    elif _is_numeric(value):
+        display = f"{value:,.1f}{unit}"
+    else:
+        display = f"{value}{unit}"
+
+    if diff is not None and diff != 0:
+        sign = "+" if diff > 0 else ""
+        display += f"（{sign}{diff:,.1f}）"
+
+    return display
+
+
+def export_comparison_to_csv(comparison: ComparisonResult) -> str:
+    """比較結果（ComparisonResult）をCSV文字列へ変換する。
+
+    Sprint 11のapp_logger.export_events_to_csvと同じ方針で、
+    Excel（Windows）で文字化けしないようUTF-8 BOM付き・CRLF区切りで出力する。
+    金融計算やAIアドバイスのロジックには一切関与しない、表示専用の整形関数。
+    """
+    if not isinstance(comparison, ComparisonResult):
+        raise ValueError("comparisonはComparisonResult形式で指定してください。")
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\r\n")
+
+    writer.writerow(["比較対象"] + comparison.names)
+    writer.writerow(["実行日時"] + comparison.created_ats)
+
+    for row in comparison.rows:
+        label = f"{row.label}" + (f"（{row.unit}）" if row.unit else "")
+        cells = [
+            format_comparison_value(value, diff, row.unit)
+            for value, diff in zip(row.values, row.diffs)
+        ]
+        writer.writerow([label] + cells)
+
+    return "\ufeff" + buffer.getvalue()
+
+
+def comparison_export_filename() -> str:
+    """比較結果CSVダウンロード用のファイル名を生成する。"""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"fire_compass_comparison_{timestamp}.csv"

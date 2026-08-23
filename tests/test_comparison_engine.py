@@ -1,6 +1,11 @@
 import pytest
 
-from services.comparison_engine import build_comparison
+from services.comparison_engine import (
+    build_comparison,
+    comparison_export_filename,
+    export_comparison_to_csv,
+    format_comparison_value,
+)
 
 
 def _record(name, cash_months, additional_investment=0.0, action="追加投資"):
@@ -97,3 +102,50 @@ def test_build_comparison_rejects_non_dict_records():
 def test_build_comparison_rejects_non_list_input():
     with pytest.raises(ValueError):
         build_comparison({"A": _record("A", 24.0)})
+
+
+def test_format_comparison_value_handles_none():
+    assert format_comparison_value(None, None, "万円") == "---"
+
+
+def test_format_comparison_value_formats_numeric_with_diff():
+    display = format_comparison_value(36.0, 12.0, "か月")
+    assert display == "36.0か月（+12.0）"
+
+
+def test_format_comparison_value_omits_zero_diff():
+    display = format_comparison_value(24.0, 0.0, "か月")
+    assert display == "24.0か月"
+
+
+def test_format_comparison_value_formats_non_numeric():
+    assert format_comparison_value("追加投資", None, "") == "追加投資"
+
+
+def test_export_comparison_to_csv_contains_header_and_bom():
+    result = build_comparison([_record("A", 24.0), _record("B", 36.0)])
+    csv_text = export_comparison_to_csv(result)
+
+    assert csv_text.startswith("\ufeff")
+    assert "比較対象,A,B" in csv_text
+    assert "実行日時" in csv_text
+    assert "\r\n" in csv_text
+
+
+def test_export_comparison_to_csv_includes_metric_rows_with_diff():
+    result = build_comparison([_record("A", 24.0), _record("B", 36.0)])
+    csv_text = export_comparison_to_csv(result)
+
+    assert "現金生活費（か月）,24.0か月,36.0か月（+12.0）" in csv_text
+
+
+def test_export_comparison_to_csv_rejects_non_comparison_result():
+    with pytest.raises(ValueError):
+        export_comparison_to_csv({"not": "a comparison result"})
+
+
+def test_comparison_export_filename_has_expected_prefix_and_extension():
+    filename = comparison_export_filename()
+
+    assert filename.startswith("fire_compass_comparison_")
+    assert filename.endswith(".csv")

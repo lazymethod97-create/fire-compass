@@ -316,5 +316,73 @@ python -m pytest -q
 8. git push origin main（直接push不可のためbundle経由で反映）
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 12候補（未着手）
+## Sprint 12完了
+主要機能:
+シミュレーション比較結果のCSVエクスポート。
+
+背景（調査結果）:
+- Sprint 7（FIREレポート）とSprint 11（ログ）には既にエクスポート機能があるが、
+  Sprint 9のシミュレーション比較ページには画面表示のみで、
+  比較結果を保存・共有する手段がなかった
+- これがSprint 1〜11の中で最も明確な機能不足だったため、Sprint 12として選定した
+
+追加・変更:
+- services/comparison_engine.py：
+  - format_comparison_value(value, diff, unit) を追加
+    - pages/9のセル表示ロジックをそのまま関数化した共通の整形関数
+    - 既存のbuild_comparison()のロジックは変更なし
+  - export_comparison_to_csv(comparison) を追加
+    - Sprint 11のapp_logger.export_events_to_csvと同じ方針
+      （UTF-8 BOM付き・CRLF区切りでExcel文字化け対策）
+    - ComparisonResult以外が渡された場合はValueError
+  - comparison_export_filename() を追加
+    - ダウンロード用ファイル名（fire_compass_comparison_日時.csv）を生成
+- pages/9_📊_シミュレーション比較.py：
+  - セル表示をformat_comparison_value()経由に置き換え（表示結果は変更なし）
+  - 「比較結果のエクスポート」セクションを追加し、
+    Sprint 11と同じst.download_buttonパターンでCSVダウンロード可能に
+  - 既存の選択・比較表示ロジックは変更なし
+
+設計:
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- history_manager.pyを変更しない
+- report_generator.pyを変更しない
+- security.pyを変更しない
+- app_logger.pyを変更しない
+- comparison_engine.pyの既存関数（build_comparison）のロジック自体は
+  変更せず、新規関数を追加するのみ
+- 金融計算ロジックは一切追加していない（比較結果の整形・出力のみ）
+
+テスト:
+python -m pytest -q
+70 passed（既存62件 + Sprint 12 8件）
+
+追加テスト（tests/test_comparison_engine.py）:
+- format_comparison_valueのNone・数値+差分・差分0・非数値の各ケース
+- CSVヘッダー（比較対象/実行日時）とBOM・CRLFの出力確認
+- 指標行に差分が正しく含まれること
+- ComparisonResult以外を渡した場合のValueError
+- ファイル名生成（プレフィックス・拡張子）
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 📄 FIREレポート /
+   🔒 公開運用・セキュリティ / 📊 シミュレーション比較 / 📋 ログ・監視）
+2. 📊 シミュレーション比較ページで2件以上の履歴を選び、
+   比較表がSprint 11以前と同じ内容で表示されることを確認
+3. 「📥 比較結果をCSVでダウンロード」ボタンからCSVファイルをダウンロードし、
+   Excelで文字化けなく開けることを確認
+4. python -m pytest -q
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 12 comparison result CSV export"
+8. git push origin main（直接push不可のためbundle経由で反映）
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 13候補（未着手）
 - docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理
+- JSONファイル保存方式（履歴・ログ）の運用限界の見直し
+- ログの期間指定・検索機能

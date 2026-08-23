@@ -89,5 +89,19 @@ UI改善・レポート出力 — 完了
 - 金融計算ロジック・AIアドバイスの内容は変更しない
 - テスト62件すべて成功（既存54件 + Sprint 11 8件）
 
-## Sprint 12候補
+## Sprint 12
+シミュレーション比較結果のCSVエクスポート — 完了
+
+- 「📊 シミュレーション比較」ページに、表示中の比較結果をCSVでダウンロード
+  するボタンを追加
+- services/comparison_engine.pyへexport_comparison_to_csv() /
+  comparison_export_filename() / format_comparison_value()を追加
+  （既存のbuild_comparison()は変更しない）
+- Excel（Windows）で文字化けしないよう、UTF-8 BOM付き・CRLF区切りで出力
+- 金融計算ロジック・AIアドバイスの内容は変更しない
+- テスト70件すべて成功（既存62件 + Sprint 12 8件）
+
+## Sprint 13候補
 - ドキュメントの表記統一（各docsファイルの見出し・記法の軽微な整理）
+- JSONファイル保存方式（履歴・ログ）の運用限界の見直し
+- ログの期間指定・検索機能
