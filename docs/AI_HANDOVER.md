@@ -444,7 +444,98 @@ python -m pytest -q
 8. git push origin main（直接push不可のためbundle経由で反映）
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 14候補（未着手）
+## Sprint 14レビュー結果
+
+Sprint 1〜13の全機能を「機能の本当に役立っているか定期レビュー」の
+5つの観点（使用頻度・最終ゴールとの直結度・二重表示・初心者の迷いにくさ・
+管理系機能の圧迫）で分類した。
+
+- Sprint 1〜5（基本シミュレーション・市場環境別防御・AIアドバイス・
+  NISA/iDeCo/年金最適化）：**維持** — 最終ゴールに直結する中核機能
+- Sprint 6（履歴保存）：**維持だが要改善** — 保存時にしか名前を付けられず、
+  あとから変更できない利便性の穴があった
+- Sprint 7（HTMLレポート出力）：**維持**
+- Sprint 8（公開セキュリティガード）：**維持**
+- Sprint 9（シミュレーション比較）：**維持**
+- Sprint 10〜13（ログ記録・CSV・キーワード検索・期間フィルタ）：**維持だが注意**
+  — 運用監視に必要だが、4Sprint連続で「FIRE意思決定支援」からやや離れた
+  管理系機能が積み上がった。削除は提案しないが、これ以上のログ機能拡張は
+  一旦停止し、次はユーザー向け価値へ回帰すべきと判断した
+
+削除・簡略化候補：なし（きたさんの承認が必要な項目は今回発生していない）。
+
+このレビュー結果を踏まえ、唯一「要改善」と特定されたSprint 6の
+履歴名称変更機能をSprint 14として選定した。
+
+## Sprint 14完了
+主要機能:
+保存済み履歴1件の名称をあとから変更できる機能。
+
+背景（レビュー結果）:
+- Sprint 6以来、履歴の保存時にしか名前を付けられず、あとから
+  「名称未設定」や誤った名前のまま変更できない利便性の穴が残っていた
+- Sprint 14候補として過去に挙がっていた「ドキュメント表記統一」「JSON保存方式の
+  運用限界見直し」は、それぞれ優先度が低い・時期尚早（件数上限に達していない）
+  と判断し見送った
+
+追加・変更:
+- services/history_manager.py：
+  - rename_history(history_id, new_name, path=None) を追加
+    - 指定したhistory_idのレコードのnameフィールドのみを書き換える
+    - inputs / results / scenariosなど、シミュレーション結果本体には
+      一切関与しない
+    - history_idが空の場合、新しい名称が空（前後空白のみ含む）の場合は
+      ValueError
+    - 対象のhistory_idが見つからない場合はFalseを返す
+  - 既存のload_history / save_history / delete_history / clear_historyは
+    変更しない
+- app.py：
+  - 「保存済み履歴」の各カードに、名称変更用のテキスト入力と
+    「✏️ 名称変更」ボタンを追加
+  - 変更成功時はhistory_renamedイベントをログ記録（_safe_log_event経由）
+  - 既存の削除ボタン・全削除ボタンのロジックは変更しない
+
+設計:
+- fire_engine.pyを変更しない
+- action_engine.pyを変更しない
+- crash_strategy.pyを変更しない
+- tax_optimization.pyを変更しない
+- ai_advisor.pyを変更しない
+- report_generator.pyを変更しない
+- security.pyを変更しない
+- comparison_engine.pyを変更しない
+- app_logger.pyを変更しない
+- history_manager.pyの既存関数のロジック自体は変更せず、新規関数を
+  追加するのみ
+- 金融計算ロジックは一切追加していない（表示用の名称変更のみ）
+
+テスト:
+python -m pytest -q
+84 passed（既存79件 + Sprint 14 5件）
+
+追加テスト（tests/test_history_manager.py）:
+- 名称変更後、名称以外のフィールド（id・assetsなど）が変わらないこと
+- 前後の空白がトリムされること
+- 存在しないhistory_idを指定した場合はFalseを返すこと
+- history_idが空の場合はValueError
+- 新しい名称が空（空白のみ含む）の場合はValueError
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 📄 FIREレポート /
+   🔒 公開運用・セキュリティ / 📊 シミュレーション比較 / 📋 ログ・監視）
+2. シミュレーションを保存後、履歴カードの「✏️ 名称変更」ボタンから
+   名称が変更されることを確認
+3. 名称を空欄にして「✏️ 名称変更」を押すと警告が表示されることを確認
+4. python -m pytest -q
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 14 history rename"
+8. git push origin main（直接push不可のためbundle経由で反映）
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 15候補（未着手）
 - docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理
 - JSONファイル保存方式（履歴・ログ）の運用限界の見直し（件数増加時の性能・移行含む）
-- 履歴（Sprint 6）の保存後の名称変更機能
+- ★次回レビュー（Sprint 17）まで、Sprint 10〜13で積み上がったログ関連の
+  機能拡張は一旦停止し、ユーザー向け価値（履歴・レポート・比較系）を
+  優先する

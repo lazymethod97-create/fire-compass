@@ -12,6 +12,7 @@ from services.history_manager import (
     clear_history,
     delete_history,
     load_history,
+    rename_history,
     save_history,
 )
 from services.tax_optimization import TaxOptimizationInput, run_tax_optimization
@@ -634,6 +635,42 @@ if history_records:
                     f"現金: "
                     f"**{results.get('cash_months', 0):,.1f}か月**"
                 )
+
+                rename_col1, rename_col2 = st.columns([3, 1])
+
+                with rename_col1:
+                    new_name = st.text_input(
+                        "名称を変更",
+                        value=record.get("name", "名称未設定"),
+                        key=f"rename_history_input_{record_id}_{index}",
+                        label_visibility="collapsed",
+                    )
+
+                with rename_col2:
+                    if st.button(
+                        "✏️ 名称変更",
+                        key=f"rename_history_{record_id}_{index}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            renamed = rename_history(
+                                record_id,
+                                new_name,
+                                path=HISTORY_PATH,
+                            )
+                        except ValueError as error:
+                            st.warning(str(error))
+                        else:
+                            if renamed:
+                                _safe_log_event(
+                                    "history_renamed",
+                                    "履歴の名称を変更しました。",
+                                )
+                                st.rerun()
+                            else:
+                                st.warning(
+                                    "対象の履歴が見つかりませんでした。"
+                                )
 
             with c2:
                 if st.button(

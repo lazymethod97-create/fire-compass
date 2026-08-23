@@ -180,6 +180,55 @@ def delete_history(
     return deleted
 
 
+def rename_history(
+    history_id: str,
+    new_name: str,
+    path: str | Path | None = None,
+) -> bool:
+    """保存済みの履歴1件の名称（nameフィールド）だけを変更する。
+
+    金融計算・シミュレーション結果（inputs / results / scenarios）には
+    一切関与しない、表示用の名称のみを書き換える関数。
+    """
+    if not history_id:
+        raise ValueError("対象の履歴IDが必要です。")
+
+    normalized_name = (new_name or "").strip()
+    if not normalized_name:
+        raise ValueError("新しい名称を入力してください。")
+
+    history = load_history(
+        path=path,
+        limit=10000,
+    )
+
+    updated = False
+    for item in history:
+        if item.get("id") == history_id:
+            item["name"] = normalized_name
+            updated = True
+            break
+
+    if not updated:
+        return False
+
+    file_path = _history_path(path)
+
+    if file_path is None:
+        return False
+
+    file_path.write_text(
+        json.dumps(
+            history,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    return True
+
+
 def clear_history(
     path: str | Path | None = None,
 ) -> None:
