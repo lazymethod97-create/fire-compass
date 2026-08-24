@@ -8,6 +8,8 @@ from services.action_engine import calculate_monthly_action
 from services.app_logger import log_event
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
+from services.monthly_budget_engine import calculate_monthly_budget
+from services.withdrawal_engine import calculate_withdrawal_plan
 from services.history_manager import (
     clear_history,
     delete_history,
@@ -44,7 +46,7 @@ def _safe_log_event(event_type: str, message: str, level: str = "INFO") -> None:
 
 
 st.title("🧭 FIRE Compass")
-st.caption("FIRE後の生活費・資産寿命・取り崩し余力をシミュレーションするアプリ")
+st.caption("FIRE後の「今月いくら使っていいか・どこから取り崩すか」を判断するためのアプリ")
 
 st.subheader("1. FIRE基本情報")
 
@@ -179,6 +181,12 @@ if run:
         min_cash_months=min_cash_months,
     )
 
+    monthly_budget = calculate_monthly_budget(
+        fire_result=result,
+        action_result=base_action,
+        market_crash=market_condition in ("暴落", "深刻な暴落"),
+    )
+
     strategy = calculate_crash_strategy(
         base_monthly_spending=result.net_annual_spending / 12.0,
         min_cash_months=min_cash_months,
@@ -213,7 +221,47 @@ if run:
     else:
         recommended_action = "取り崩し・追加投資は不要"
 
-    st.subheader("4. 今月の推奨行動")
+    st.subheader("4. 今月のFIRE判定")
+
+    status_label = {
+        "green": "🟢 安全",
+        "yellow": "🟡 注意",
+        "red": "🔴 警戒",
+    }[monthly_budget.status]
+
+    status_display = {
+        "green": st.success,
+        "yellow": st.warning,
+        "red": st.error,
+    }[monthly_budget.status]
+
+    status_display(f"**{status_label}**")
+
+    b1, b2, b3 = st.columns(3)
+
+    b1.metric(
+        "安全生活費",
+        f"{monthly_budget.safe_monthly:,.1f}万円",
+    )
+
+    b2.metric(
+        "推奨生活費",
+        f"{monthly_budget.recommended_monthly:,.1f}万円",
+    )
+
+    b3.metric(
+        "上限生活費",
+        f"{monthly_budget.max_monthly:,.1f}万円",
+    )
+
+    st.caption(
+        "安全生活費はこの範囲なら計画から外れにくい目安、"
+        "上限生活費は資産・現金に余裕がある場合のみ使ってよい目安です。"
+        "悲観ケースで資産が枯渇する見込み、または現金バッファ不足、"
+        "市場暴落時は自動的に安全側に調整されます。"
+    )
+
+    st.subheader("5. 今月の推奨行動")
 
     st.success(
         f"**{strategy.label}：{recommended_action}**"
@@ -248,7 +296,7 @@ if run:
         "総資産シミュレーションそのものには二重計上しません。"
     )
 
-    st.subheader("5. 市場環境別の防御ルール")
+    st.subheader("6. 市場環境別の防御ルール")
 
     rule_cols = st.columns(4)
 
@@ -276,7 +324,7 @@ if run:
                 f"{condition_strategy.spending_reduction_pct:.0f}%**"
             )
 
-    st.subheader("6. AI FIREアドバイス")
+    st.subheader("7. AI FIREアドバイス")
 
     ai_advice = generate_ai_advice(
         fire_result=result,
@@ -288,7 +336,7 @@ if run:
     )
 
     st.markdown(ai_advice)
-    st.subheader("7. NISA・iDeCo・年金最適化")
+    st.subheader("8. NISA・iDeCo・年金最適化")
 
     t1, t2, t3 = st.columns(3)
 
@@ -407,6 +455,45 @@ if run:
         "年金は65〜75歳の受給開始年齢を入力し、開始後の生活費不足額を表示します。"
     )
 
+    st.subheader("9. 今月の取り崩しプラン")
+
+    withdrawal_plan = calculate_withdrawal_plan(
+        amount_needed=monthly_budget.safe_monthly,
+        cash_assets=cash_assets,
+        cash_buffer_target=target_cash,
+        taxable_assets=taxable_assets,
+        nisa_assets=nisa_assets,
+        ideco_assets=ideco_assets,
+        current_age=current_age,
+        ideco_access_age=tax_result.ideco_access_age,
+        pension_start_age=tax_result.pension_start_age,
+        pension_monthly_income=tax_result.pension_monthly_income,
+    )
+
+    st.caption(
+        f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円を、"
+        "どこから充当するかの候補です。"
+    )
+
+    for step in withdrawal_plan.steps:
+        if step.amount > 0:
+            st.write(f"**{step.source}：{step.amount:,.1f}万円** — {step.reason}")
+        else:
+            st.caption(f"{step.source} — {step.reason}")
+
+    if withdrawal_plan.dipped_into_cash_buffer:
+        st.warning(
+            "最低現金バッファを一時的に下回る取り崩し案です。"
+            "早めにバッファの補充を検討してください。"
+        )
+
+    if withdrawal_plan.shortfall_uncovered > 0.005:
+        st.error(
+            f"現金・課税口座・NISA・iDeCo・年金では"
+            f"{withdrawal_plan.shortfall_uncovered:,.1f}万円が不足しています。"
+            "生活費の見直しが必要な水準です。"
+        )
+
     _safe_log_event(
         "simulation_executed",
         f"FIREシミュレーションを実行しました（市場環境: {market_condition}）。",
@@ -464,7 +551,7 @@ if run:
     }
 
 
-    st.subheader("8. 現在のFIRE状態")
+    st.subheader("10. 現在のFIRE状態")
 
     m1, m2, m3, m4 = st.columns(4)
 
@@ -490,7 +577,7 @@ if run:
 
     st.info(result.advice)
 
-    st.subheader("9. 資産推移")
+    st.subheader("11. 資産推移")
 
     chart_df = result.yearly_df.set_index("age")[
         ["standard", "bear", "bull"]
@@ -507,7 +594,7 @@ if run:
         use_container_width=True,
     )
 
-    st.subheader("10. シナリオ結果")
+    st.subheader("12. シナリオ結果")
 
     scenario_cols = st.columns(3)
 
@@ -547,7 +634,7 @@ else:
 > 入力条件に基づくシミュレーションと行動候補を表示します。
 """
     )
-st.subheader("11. 保存・履歴管理")
+st.subheader("13. 保存・履歴管理")
 
 latest_simulation = st.session_state.get(
     "latest_simulation"
