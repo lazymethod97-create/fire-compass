@@ -29,6 +29,7 @@ def calculate_monthly_budget(
     fire_result: FireResult,
     action_result: ActionResult,
     market_crash: bool = False,
+    upcoming_large_expense: float = 0.0,
 ) -> MonthlyBudgetResult:
     """run_fire_simulationとcalculate_monthly_actionの出力から、
     今月の安全生活費・推奨生活費・上限生活費とガードレール判定を算出する。
@@ -38,7 +39,16 @@ def calculate_monthly_budget(
 
     market_crashは暴落検知機能が実装されるまでの暫定引数。
     将来のSprintで市場データと連動させる想定。
+
+    upcoming_large_expenseは今月に予定されている大型支出（旅行・車・医療等）
+    の合計額（万円）。デフォルト0.0は既存呼び出しと完全に同じ挙動になる。
+    安全/推奨/上限生活費の金額そのものは変更せず、現金の余力（cash_surplus）
+    を超える予定支出がある場合にのみガードレール判定を1段階厳しくする
+    （green→yellowへの格下げのみ。既にyellow/redの場合はそのまま）。
     """
+    if upcoming_large_expense < 0:
+        raise ValueError("大型支出予定の合計額は0以上にしてください。")
+
     recommended_monthly = fire_result.recommended_monthly_spending
     reasons: List[str] = []
 
@@ -88,6 +98,15 @@ def calculate_monthly_budget(
         status = "yellow"
     else:
         status = "green"
+
+    # --- 大型支出予定による格下げ（既存の判定を厳しくする方向にのみ働く） ---
+    if upcoming_large_expense > 0.005:
+        if upcoming_large_expense > action_result.cash_surplus + 0.005:
+            reasons.append("large_expense_exceeds_cash_surplus")
+            if status == "green":
+                status = "yellow"
+        else:
+            reasons.append("large_expense_within_cash_surplus")
 
     return MonthlyBudgetResult(
         safe_monthly=safe_monthly,

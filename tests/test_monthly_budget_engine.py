@@ -100,3 +100,81 @@ def test_zero_target_cash_amount_does_not_divide_by_zero():
         _make_action_result(cash_shortage=0.0, target_cash_amount=0.0),
     )
     assert result.status == "green"
+
+
+def test_default_upcoming_large_expense_matches_previous_behavior():
+    baseline = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=False),
+        _make_action_result(cash_shortage=0.0),
+    )
+    explicit_zero = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=False),
+        _make_action_result(cash_shortage=0.0),
+        upcoming_large_expense=0.0,
+    )
+    assert baseline == explicit_zero
+
+
+def test_large_expense_within_cash_surplus_does_not_downgrade_status():
+    # _make_action_result(cash_shortage=0.0)のcash_surplusは50.0
+    result = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=False),
+        _make_action_result(cash_shortage=0.0),
+        upcoming_large_expense=30.0,
+    )
+    assert result.status == "green"
+    assert "large_expense_within_cash_surplus" in result.reasons
+    assert "large_expense_exceeds_cash_surplus" not in result.reasons
+
+
+def test_large_expense_exceeding_cash_surplus_downgrades_green_to_yellow():
+    result = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=False),
+        _make_action_result(cash_shortage=0.0),
+        upcoming_large_expense=80.0,
+    )
+    assert result.status == "yellow"
+    assert "large_expense_exceeds_cash_surplus" in result.reasons
+
+
+def test_large_expense_does_not_change_safe_or_max_monthly_amounts():
+    without_expense = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=False),
+        _make_action_result(cash_shortage=0.0),
+    )
+    with_expense = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=False),
+        _make_action_result(cash_shortage=0.0),
+        upcoming_large_expense=80.0,
+    )
+    assert with_expense.safe_monthly == without_expense.safe_monthly
+    assert with_expense.max_monthly == without_expense.max_monthly
+
+
+def test_large_expense_does_not_upgrade_existing_red_status():
+    result = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=True),
+        _make_action_result(cash_shortage=0.0),
+        upcoming_large_expense=80.0,
+    )
+    assert result.status == "red"
+    assert "large_expense_exceeds_cash_surplus" in result.reasons
+
+
+def test_large_expense_does_not_upgrade_existing_yellow_status():
+    result = calculate_monthly_budget(
+        _make_fire_result(bear_depletes=False),
+        _make_action_result(cash_shortage=40.0),
+        upcoming_large_expense=80.0,
+    )
+    assert result.status == "yellow"
+    assert "large_expense_exceeds_cash_surplus" in result.reasons
+
+
+def test_negative_upcoming_large_expense_raises_value_error():
+    with pytest.raises(ValueError):
+        calculate_monthly_budget(
+            _make_fire_result(bear_depletes=False),
+            _make_action_result(cash_shortage=0.0),
+            upcoming_large_expense=-1.0,
+        )

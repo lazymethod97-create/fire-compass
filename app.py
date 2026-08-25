@@ -1,4 +1,5 @@
 import os
+from datetime import date
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -8,6 +9,13 @@ from services.action_engine import calculate_monthly_action
 from services.app_logger import log_event
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
+from services.large_expense_engine import (
+    CATEGORIES as LARGE_EXPENSE_CATEGORIES,
+    add_large_expense,
+    delete_large_expense,
+    load_large_expenses,
+    total_for_month,
+)
 from services.monthly_budget_engine import calculate_monthly_budget
 from services.withdrawal_engine import calculate_withdrawal_plan
 from services.history_manager import (
@@ -25,6 +33,7 @@ from services.tax_optimization import TaxOptimizationInput, run_tax_optimization
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
 EVENT_LOG_PATH = os.path.join(BASE_DIR, ".fire_compass_events.log")
+LARGE_EXPENSE_PATH = os.path.join(BASE_DIR, ".fire_compass_large_expenses.json")
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 st.set_page_config(
     page_title="FIRE Compass",
@@ -153,6 +162,93 @@ with c11:
         ["通常", "弱気相場", "暴落", "深刻な暴落"],
     )
 
+st.subheader("3.5. 今月以降の大型支出予定")
+
+st.caption(
+    "旅行・車・医療などの不定期な大型支出を登録できます。"
+    "今月分の予定は、今月のFIRE判定・取り崩しプランに反映されます。"
+)
+
+with st.form("add_large_expense_form", clear_on_submit=True):
+    e1, e2, e3, e4 = st.columns([2, 1, 1, 1])
+
+    with e1:
+        expense_name = st.text_input("支出の名称", placeholder="例: 沖縄旅行")
+
+    with e2:
+        expense_category = st.selectbox("カテゴリ", LARGE_EXPENSE_CATEGORIES)
+
+    with e3:
+        expense_amount = st.number_input(
+            "金額（万円）",
+            min_value=0.0,
+            value=0.0,
+            step=1.0,
+        )
+
+    with e4:
+        expense_month = st.text_input(
+            "予定月（YYYY-MM）",
+            value=date.today().strftime("%Y-%m"),
+        )
+
+    expense_memo = st.text_input("メモ（任意）", placeholder="任意で入力")
+
+    if st.form_submit_button("➕ 大型支出予定を追加"):
+        try:
+            add_large_expense(
+                expense_name,
+                expense_category,
+                expense_amount,
+                expense_month,
+                memo=expense_memo,
+                path=LARGE_EXPENSE_PATH,
+            )
+        except ValueError as error:
+            st.warning(str(error))
+        else:
+            _safe_log_event(
+                "large_expense_added",
+                f"大型支出予定を追加しました（カテゴリ: {expense_category}）。",
+            )
+            st.rerun()
+
+large_expenses = load_large_expenses(path=LARGE_EXPENSE_PATH)
+
+if large_expenses:
+    st.caption(f"登録済みの大型支出予定：{len(large_expenses)}件")
+
+    for index, expense in enumerate(large_expenses):
+        expense_id = expense.get("id", "")
+
+        with st.container(border=True):
+            le1, le2 = st.columns([4, 1])
+
+            with le1:
+                st.write(
+                    f"**{expense.get('expected_month', '---')}　"
+                    f"{expense.get('name', '')}"
+                    f"（{expense.get('category', '')}）："
+                    f"{expense.get('amount', 0):,.1f}万円**"
+                )
+                if expense.get("memo"):
+                    st.caption(expense["memo"])
+
+            with le2:
+                if st.button(
+                    "🗑️ 削除",
+                    key=f"delete_large_expense_{expense_id}_{index}",
+                    use_container_width=True,
+                ):
+                    delete_large_expense(expense_id, path=LARGE_EXPENSE_PATH)
+                    _safe_log_event(
+                        "large_expense_deleted",
+                        "大型支出予定を1件削除しました。",
+                    )
+                    st.rerun()
+else:
+    st.caption("登録済みの大型支出予定はありません。")
+
 run = st.button(
     "🧭 FIREシミュレーションを実行",
     type="primary",
@@ -181,10 +277,17 @@ if run:
         min_cash_months=min_cash_months,
     )
 
+    current_month = date.today().strftime("%Y-%m")
+    this_month_large_expense_total = total_for_month(
+        load_large_expenses(path=LARGE_EXPENSE_PATH),
+        current_month,
+    )
+
     monthly_budget = calculate_monthly_budget(
         fire_result=result,
         action_result=base_action,
         market_crash=market_condition in ("暴落", "深刻な暴落"),
+        upcoming_large_expense=this_month_large_expense_total,
     )
 
     strategy = calculate_crash_strategy(
@@ -260,6 +363,18 @@ if run:
         "悲観ケースで資産が枯渇する見込み、または現金バッファ不足、"
         "市場暴落時は自動的に安全側に調整されます。"
     )
+
+    if this_month_large_expense_total > 0.005:
+        if "large_expense_exceeds_cash_surplus" in monthly_budget.reasons:
+            st.warning(
+                f"今月は大型支出の予定が{this_month_large_expense_total:,.1f}万円あり、"
+                "現金の余力を超えているため判定を1段階厳しくしています。"
+            )
+        else:
+            st.caption(
+                f"今月は大型支出の予定が{this_month_large_expense_total:,.1f}万円ありますが、"
+                "現金の余力の範囲内のため判定は変更していません。"
+            )
 
     st.subheader("5. 今月の推奨行動")
 
@@ -457,8 +572,12 @@ if run:
 
     st.subheader("9. 今月の取り崩しプラン")
 
+    withdrawal_amount_needed = round(
+        monthly_budget.safe_monthly + this_month_large_expense_total, 2
+    )
+
     withdrawal_plan = calculate_withdrawal_plan(
-        amount_needed=monthly_budget.safe_monthly,
+        amount_needed=withdrawal_amount_needed,
         cash_assets=cash_assets,
         cash_buffer_target=target_cash,
         taxable_assets=taxable_assets,
@@ -470,10 +589,17 @@ if run:
         pension_monthly_income=tax_result.pension_monthly_income,
     )
 
-    st.caption(
-        f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円を、"
-        "どこから充当するかの候補です。"
-    )
+    if this_month_large_expense_total > 0.005:
+        st.caption(
+            f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円に、"
+            f"今月予定の大型支出 {this_month_large_expense_total:,.1f}万円を加えた"
+            f"合計 {withdrawal_amount_needed:,.1f}万円を、どこから充当するかの候補です。"
+        )
+    else:
+        st.caption(
+            f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円を、"
+            "どこから充当するかの候補です。"
+        )
 
     for step in withdrawal_plan.steps:
         if step.amount > 0:
