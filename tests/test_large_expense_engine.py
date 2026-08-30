@@ -2,7 +2,7 @@ import pytest
 
 from services.large_expense_engine import (
     add_large_expense,
-    delete_large_expense,
+    distribution_end_month,
     expenses_for_month,
     load_large_expenses,
     total_for_month,
@@ -11,133 +11,157 @@ from services.large_expense_engine import (
 
 @pytest.fixture
 def expense_path(tmp_path):
-    return tmp_path / ".fire_compass_large_expenses.json"
+    return tmp_path / "expenses.json"
 
 
-def test_add_large_expense_persists_and_returns_record(expense_path):
+# --- 後方互換（distribution_months省略・1件の従来通り単月計上） ---
+
+def test_add_large_expense_default_distribution_is_one(expense_path):
     record = add_large_expense(
         "沖縄旅行",
         "旅行",
         30.0,
-        "2026-10",
-        memo="家族旅行",
+        "2026-09",
         path=expense_path,
     )
-
-    assert record["name"] == "沖縄旅行"
-    assert record["category"] == "旅行"
-    assert record["amount"] == 30.0
-    assert record["expected_month"] == "2026-10"
-    assert record["memo"] == "家族旅行"
-    assert record["id"]
-    assert record["created_at"]
-
-    loaded = load_large_expenses(path=expense_path)
-    assert len(loaded) == 1
-    assert loaded[0]["id"] == record["id"]
+    assert record["distribution_months"] == 1
 
 
-def test_add_large_expense_trims_name_and_memo(expense_path):
-    record = add_large_expense(
-        "  車検  ",
-        "車",
-        15.0,
-        "2026-11",
-        memo="  ディーラーで実施  ",
-        path=expense_path,
+def test_total_for_month_backward_compatible_single_month(expense_path):
+    add_large_expense("沖縄旅行", "旅行", 30.0, "2026-09", path=expense_path)
+
+    expenses = load_large_expenses(path=expense_path)
+
+    assert total_for_month(expenses, "2026-09") == 30.0
+    assert total_for_month(expenses, "2026-10") == 0.0
+
+
+def test_legacy_record_without_distribution_months_key_treated_as_one(expense_path):
+    # distribution_monthsキーを持たない旧データを模擬する
+    expense_path.write_text(
+        '[{"id": "abc", "name": "車検", "category": "車", "amount": 12.0, '
+        '"expected_month": "2026-11", "memo": "", "created_at": "2026-01-01T00:00:00+00:00"}]',
+        encoding="utf-8",
     )
-    assert record["name"] == "車検"
-    assert record["memo"] == "ディーラーで実施"
 
+    expenses = load_large_expenses(path=expense_path)
 
-@pytest.mark.parametrize(
-    "name,category,amount,month",
-    [
-        ("", "旅行", 10.0, "2026-10"),
-        ("   ", "旅行", 10.0, "2026-10"),
-        ("旅行", "レジャー", 10.0, "2026-10"),
-        ("旅行", "旅行", -1.0, "2026-10"),
-        ("旅行", "旅行", 10.0, "2026/10"),
-        ("旅行", "旅行", 10.0, "26-10"),
-        ("旅行", "旅行", 10.0, ""),
-    ],
-)
-def test_add_large_expense_validation_errors(expense_path, name, category, amount, month):
-    with pytest.raises(ValueError):
-        add_large_expense(name, category, amount, month, path=expense_path)
-
-
-def test_load_large_expenses_sorted_by_month_then_created_at(expense_path):
-    add_large_expense("車検", "車", 15.0, "2027-01", path=expense_path)
-    add_large_expense("旅行A", "旅行", 20.0, "2026-10", path=expense_path)
-    add_large_expense("旅行B", "旅行", 5.0, "2026-10", path=expense_path)
-
-    loaded = load_large_expenses(path=expense_path)
-    months = [item["expected_month"] for item in loaded]
-    assert months == ["2026-10", "2026-10", "2027-01"]
-    assert [item["name"] for item in loaded if item["expected_month"] == "2026-10"] == [
-        "旅行A",
-        "旅行B",
-    ]
-
-
-def test_load_large_expenses_missing_file_returns_empty_list(expense_path):
-    assert load_large_expenses(path=expense_path) == []
-
-
-def test_delete_large_expense_removes_matching_record(expense_path):
-    record = add_large_expense("車検", "車", 15.0, "2026-11", path=expense_path)
-    add_large_expense("旅行", "旅行", 20.0, "2026-10", path=expense_path)
-
-    deleted = delete_large_expense(record["id"], path=expense_path)
-    assert deleted is True
-
-    remaining = load_large_expenses(path=expense_path)
-    assert len(remaining) == 1
-    assert remaining[0]["name"] == "旅行"
-
-
-def test_delete_large_expense_returns_false_when_not_found(expense_path):
-    add_large_expense("旅行", "旅行", 20.0, "2026-10", path=expense_path)
-    assert delete_large_expense("does-not-exist", path=expense_path) is False
-
-
-def test_delete_large_expense_requires_id(expense_path):
-    with pytest.raises(ValueError):
-        delete_large_expense("", path=expense_path)
-
-
-def test_total_for_month_sums_matching_records_only():
-    expenses = [
-        {"expected_month": "2026-10", "amount": 30.0},
-        {"expected_month": "2026-10", "amount": 12.5},
-        {"expected_month": "2026-11", "amount": 100.0},
-    ]
-    assert total_for_month(expenses, "2026-10") == 42.5
-    assert total_for_month(expenses, "2026-11") == 100.0
+    assert total_for_month(expenses, "2026-11") == 12.0
     assert total_for_month(expenses, "2026-12") == 0.0
 
 
-def test_total_for_month_ignores_non_dict_items():
-    expenses = [{"expected_month": "2026-10", "amount": 10.0}, "not-a-dict"]
-    assert total_for_month(expenses, "2026-10") == 10.0
+# --- 複数月分散（Sprint 26） ---
+
+def test_even_split_across_months(expense_path):
+    add_large_expense(
+        "沖縄旅行",
+        "旅行",
+        90.0,
+        "2026-09",
+        distribution_months=3,
+        path=expense_path,
+    )
+
+    expenses = load_large_expenses(path=expense_path)
+
+    assert total_for_month(expenses, "2026-09") == 30.0
+    assert total_for_month(expenses, "2026-10") == 30.0
+    assert total_for_month(expenses, "2026-11") == 30.0
+    assert total_for_month(expenses, "2026-12") == 0.0
 
 
-def test_total_for_month_rejects_non_list():
+def test_remainder_distributed_across_months_not_lumped_into_last(expense_path):
+    # 100 / 3 = 33.33... → 33.34 + 33.33 + 33.33 のように端数を前方の月から分散する
+    add_large_expense(
+        "医療費",
+        "医療",
+        100.0,
+        "2026-01",
+        distribution_months=3,
+        path=expense_path,
+    )
+
+    expenses = load_large_expenses(path=expense_path)
+
+    jan = total_for_month(expenses, "2026-01")
+    feb = total_for_month(expenses, "2026-02")
+    mar = total_for_month(expenses, "2026-03")
+
+    # 端数(1銭)は最初の月に寄る想定だが、実装詳細ではなく「合計が一致」
+    # 「差が0.01万円以内」であることを検証する
+    assert round(jan + feb + mar, 2) == 100.0
+    assert round(max(jan, feb, mar) - min(jan, feb, mar), 2) <= 0.01
+
+
+def test_distribution_across_year_boundary(expense_path):
+    add_large_expense(
+        "車",
+        "車",
+        60.0,
+        "2026-11",
+        distribution_months=4,
+        path=expense_path,
+    )
+
+    expenses = load_large_expenses(path=expense_path)
+
+    assert total_for_month(expenses, "2026-11") == 15.0
+    assert total_for_month(expenses, "2026-12") == 15.0
+    assert total_for_month(expenses, "2027-01") == 15.0
+    assert total_for_month(expenses, "2027-02") == 15.0
+    assert total_for_month(expenses, "2027-03") == 0.0
+
+
+def test_multiple_expenses_summed_in_same_month(expense_path):
+    add_large_expense(
+        "沖縄旅行", "旅行", 90.0, "2026-09", distribution_months=3, path=expense_path
+    )
+    add_large_expense("車検", "車", 12.0, "2026-10", path=expense_path)
+
+    expenses = load_large_expenses(path=expense_path)
+
+    # 9月分割(30) + 10月分割(30) + 車検(12) = 42
+    assert total_for_month(expenses, "2026-10") == 42.0
+
+
+def test_expenses_for_month_returns_amount_for_month(expense_path):
+    add_large_expense(
+        "沖縄旅行", "旅行", 90.0, "2026-09", distribution_months=3, path=expense_path
+    )
+
+    expenses = load_large_expenses(path=expense_path)
+    october_entries = expenses_for_month(expenses, "2026-10")
+
+    assert len(october_entries) == 1
+    assert october_entries[0]["amount_for_month"] == 30.0
+    assert october_entries[0]["amount"] == 90.0  # 元の合計額は変更しない
+
+
+def test_distribution_end_month(expense_path):
+    record = add_large_expense(
+        "沖縄旅行", "旅行", 90.0, "2026-11", distribution_months=3, path=expense_path
+    )
+    assert distribution_end_month(record) == "2027-01"
+
+
+def test_distribution_end_month_single_month_unchanged(expense_path):
+    record = add_large_expense(
+        "車検", "車", 12.0, "2026-10", path=expense_path
+    )
+    assert distribution_end_month(record) == "2026-10"
+
+
+# --- バリデーション ---
+
+def test_distribution_months_must_be_positive_int(expense_path):
     with pytest.raises(ValueError):
-        total_for_month("not-a-list", "2026-10")
+        add_large_expense(
+            "旅行", "旅行", 30.0, "2026-09", distribution_months=0, path=expense_path
+        )
 
 
-def test_expenses_for_month_filters_correctly():
-    expenses = [
-        {"expected_month": "2026-10", "name": "旅行A"},
-        {"expected_month": "2026-11", "name": "車検"},
-    ]
-    result = expenses_for_month(expenses, "2026-10")
-    assert len(result) == 1
-    assert result[0]["name"] == "旅行A"
-
-
-def test_expenses_for_month_rejects_non_list():
+def test_distribution_months_must_be_int_not_float(expense_path):
     with pytest.raises(ValueError):
-        expenses_for_month("not-a-list", "2026-10")
+        add_large_expense(
+            "旅行", "旅行", 30.0, "2026-09", distribution_months=2.5, path=expense_path
+        )

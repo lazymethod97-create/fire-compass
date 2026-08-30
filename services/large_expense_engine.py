@@ -13,6 +13,12 @@ CATEGORIES = ("旅行", "車", "医療", "その他")
 
 _MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
+# Sprint 26で追加。1件の大型支出を、予定月から連続するNヶ月に
+# 均等分散して計上できるようにする（例: 90万円の旅行費用を3ヶ月に
+# 分けて計上）。1（分散なし・従来通り単月計上）が既存呼び出しとの
+# 後方互換のデフォルト値。
+DEFAULT_DISTRIBUTION_MONTHS = 1
+
 
 @dataclass
 class LargeExpense:
@@ -20,9 +26,11 @@ class LargeExpense:
     name: str
     category: str
     amount: float
-    expected_month: str  # "YYYY-MM"
+    expected_month: str  # "YYYY-MM"（分散開始月）
     memo: str
     created_at: str
+    # Sprint 26で追加。amountを何ヶ月に分散して計上するか（1以上の整数）。
+    distribution_months: int = DEFAULT_DISTRIBUTION_MONTHS
 
 
 def _validate_new_expense(
@@ -30,6 +38,7 @@ def _validate_new_expense(
     category: str,
     amount: float,
     expected_month: str,
+    distribution_months: int,
 ) -> None:
     if not (name or "").strip():
         raise ValueError("支出の名称を入力してください。")
@@ -45,9 +54,52 @@ def _validate_new_expense(
     if not _MONTH_PATTERN.match((expected_month or "").strip()):
         raise ValueError("予定月はYYYY-MM形式で指定してください。")
 
+    if (
+        distribution_months is None
+        or not isinstance(distribution_months, int)
+        or isinstance(distribution_months, bool)
+        or distribution_months < 1
+    ):
+        raise ValueError("分散月数は1以上の整数にしてください。")
+
 
 def _large_expense_path(path: str | Path | None = None) -> Path:
     return Path(path or DEFAULT_LARGE_EXPENSE_PATH)
+
+
+def _add_months(month_str: str, offset: int) -> str:
+    """"YYYY-MM"にoffsetヶ月を加算した"YYYY-MM"を返す（年またぎ対応）。"""
+    year, month = (int(part) for part in month_str.split("-"))
+    total_months = year * 12 + (month - 1) + offset
+    new_year, new_month = divmod(total_months, 12)
+    return f"{new_year:04d}-{new_month + 1:02d}"
+
+
+def _month_amounts(
+    amount: float,
+    expected_month: str,
+    distribution_months: int,
+) -> dict[str, float]:
+    """1件の大型支出を分散月数ぶんの月別金額に分割する。
+
+    均等に割り切れない端数は、できるだけ均等になるよう各月へ1銭単位
+    （0.01万円単位）で分散する（前方の月から順に1単位ずつ多く割り当てる）。
+    分散した金額の合計は必ずamountの元の丸め額（小数点2桁）と一致する。
+    """
+    distribution_months = max(int(distribution_months or 1), 1)
+
+    total_cents = round(float(amount) * 100)
+    base_cents, remainder_cents = divmod(total_cents, distribution_months)
+
+    months = [_add_months(expected_month, i) for i in range(distribution_months)]
+
+    result: dict[str, float] = {}
+    for index, month in enumerate(months):
+        cents = base_cents + (1 if index < remainder_cents else 0)
+        # 同じ支出が複数分散区間にまたがることはない前提だが、念のため加算にする。
+        result[month] = round(result.get(month, 0.0) + cents / 100.0, 2)
+
+    return result
 
 
 def load_large_expenses(
@@ -101,14 +153,19 @@ def add_large_expense(
     amount: float,
     expected_month: str,
     memo: str = "",
+    distribution_months: int = DEFAULT_DISTRIBUTION_MONTHS,
     path: str | Path | None = None,
 ) -> dict:
     """大型支出予定を1件追加する。
 
     金融計算（資産寿命シミュレーション・現金バッファ・取り崩し優先順位）
     には一切関与しない。予定支出の入力を記録するだけの関数。
+
+    distribution_months（Sprint 26で追加、省略可能・デフォルト1）は、
+    amountをexpected_monthから連続する何ヶ月に均等分散して計上するか。
+    1（デフォルト）を指定した場合は既存呼び出しと完全に同じ挙動になる。
     """
-    _validate_new_expense(name, category, amount, expected_month)
+    _validate_new_expense(name, category, amount, expected_month, distribution_months)
 
     record = {
         "id": uuid4().hex,
@@ -117,6 +174,7 @@ def add_large_expense(
         "amount": round(float(amount), 2),
         "expected_month": expected_month.strip(),
         "memo": (memo or "").strip(),
+        "distribution_months": int(distribution_months),
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -149,7 +207,11 @@ def total_for_month(
     expenses: list[dict],
     target_month: str,
 ) -> float:
-    """指定月（YYYY-MM）に予定されている大型支出の合計額を返す。
+    """指定月（YYYY-MM）に計上される大型支出の合計額を返す。
+
+    Sprint 26より、distribution_monthsが2以上の支出は、分散区間に
+    target_monthが含まれる場合にその月の按分額のみを計上する
+    （distribution_monthsが未設定・1の既存データは従来通り単月全額）。
 
     今月の安全生活費・取り崩しプランへ「今月分だけ」を反映させるための
     集計専用関数。monthly_budget_engine / withdrawal_engineのロジック
@@ -158,11 +220,19 @@ def total_for_month(
     if not isinstance(expenses, list):
         raise ValueError("expensesはリスト形式で指定してください。")
 
-    total = sum(
-        float(item.get("amount", 0.0))
-        for item in expenses
-        if isinstance(item, dict) and item.get("expected_month") == target_month
-    )
+    total = 0.0
+    for item in expenses:
+        if not isinstance(item, dict):
+            continue
+
+        month_amounts = _month_amounts(
+            amount=item.get("amount", 0.0),
+            expected_month=str(item.get("expected_month", "")),
+            distribution_months=item.get(
+                "distribution_months", DEFAULT_DISTRIBUTION_MONTHS
+            ),
+        )
+        total += month_amounts.get(target_month, 0.0)
 
     return round(total, 2)
 
@@ -171,11 +241,44 @@ def expenses_for_month(
     expenses: list[dict],
     target_month: str,
 ) -> list[dict]:
+    """target_monthに按分計上される大型支出の一覧を返す。
+
+    各要素は元のレコードのコピーに、その月に計上される按分額
+    "amount_for_month"を追加したもの。distribution_monthsが1（従来通り）
+    の支出はamount_for_month == amountとなる。
+    """
     if not isinstance(expenses, list):
         raise ValueError("expensesはリスト形式で指定してください。")
 
-    return [
-        item
-        for item in expenses
-        if isinstance(item, dict) and item.get("expected_month") == target_month
-    ]
+    result: list[dict] = []
+    for item in expenses:
+        if not isinstance(item, dict):
+            continue
+
+        month_amounts = _month_amounts(
+            amount=item.get("amount", 0.0),
+            expected_month=str(item.get("expected_month", "")),
+            distribution_months=item.get(
+                "distribution_months", DEFAULT_DISTRIBUTION_MONTHS
+            ),
+        )
+
+        if target_month in month_amounts:
+            enriched = dict(item)
+            enriched["amount_for_month"] = month_amounts[target_month]
+            result.append(enriched)
+
+    return result
+
+
+def distribution_end_month(expense: dict) -> str:
+    """支出レコードの分散区間の最終月（"YYYY-MM"）を返す。
+
+    distribution_monthsが1（従来通り）の場合はexpected_monthと同じ値を返す。
+    表示用の補助関数で、計算ロジックには影響しない。
+    """
+    expected_month = str(expense.get("expected_month", ""))
+    distribution_months = int(
+        expense.get("distribution_months", DEFAULT_DISTRIBUTION_MONTHS) or 1
+    )
+    return _add_months(expected_month, max(distribution_months - 1, 0))

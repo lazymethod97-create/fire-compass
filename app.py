@@ -1,6 +1,7 @@
 import os
 from datetime import date
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -13,12 +14,14 @@ from services.large_expense_engine import (
     CATEGORIES as LARGE_EXPENSE_CATEGORIES,
     add_large_expense,
     delete_large_expense,
+    distribution_end_month,
     load_large_expenses,
     total_for_month,
 )
 from services.market_data_engine import MarketDataError, fetch_market_condition
 from services.monthly_budget_engine import calculate_monthly_budget
 from services.budget_explanation import build_budget_explanation
+from services.judgment_trend_engine import load_judgment_trend, record_monthly_judgment
 from services.sequence_risk_engine import calculate_sequence_risk_factor
 from services.withdrawal_engine import calculate_withdrawal_plan
 from services.history_manager import (
@@ -37,6 +40,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
 EVENT_LOG_PATH = os.path.join(BASE_DIR, ".fire_compass_events.log")
 LARGE_EXPENSE_PATH = os.path.join(BASE_DIR, ".fire_compass_large_expenses.json")
+JUDGMENT_TREND_PATH = os.path.join(BASE_DIR, ".fire_compass_judgment_trend.json")
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 st.set_page_config(
     page_title="FIRE Compass",
@@ -213,10 +217,12 @@ st.subheader("3.5. 今月以降の大型支出予定")
 st.caption(
     "旅行・車・医療などの不定期な大型支出を登録できます。"
     "今月分の予定は、今月のFIRE判定・取り崩しプランに反映されます。"
+    "複数か月に分けて計上したい場合は「分散月数」を1より大きくしてください"
+    "（例: 90万円を3か月に分散すると毎月30万円ずつ計上されます）。"
 )
 
 with st.form("add_large_expense_form", clear_on_submit=True):
-    e1, e2, e3, e4 = st.columns([2, 1, 1, 1])
+    e1, e2, e3, e4, e5 = st.columns([2, 1, 1, 1, 1])
 
     with e1:
         expense_name = st.text_input("支出の名称", placeholder="例: 沖縄旅行")
@@ -236,6 +242,21 @@ with st.form("add_large_expense_form", clear_on_submit=True):
         expense_month = st.text_input(
             "予定月（YYYY-MM）",
             value=date.today().strftime("%Y-%m"),
+            help="分散する場合は、この月が分散区間の開始月になります。",
+        )
+
+    with e5:
+        expense_distribution_months = st.number_input(
+            "分散月数",
+            min_value=1,
+            max_value=36,
+            value=1,
+            step=1,
+            help=(
+                "1のままだと従来通り予定月に全額計上します。"
+                "2以上にすると、予定月から連続する月に均等分散します"
+                "（端数はできるだけ均等に各月へ配分されます）。"
+            ),
         )
 
     expense_memo = st.text_input("メモ（任意）", placeholder="任意で入力")
@@ -248,6 +269,7 @@ with st.form("add_large_expense_form", clear_on_submit=True):
                 expense_amount,
                 expense_month,
                 memo=expense_memo,
+                distribution_months=int(expense_distribution_months),
                 path=LARGE_EXPENSE_PATH,
             )
         except ValueError as error:
@@ -271,12 +293,27 @@ if large_expenses:
             le1, le2 = st.columns([4, 1])
 
             with le1:
-                st.write(
-                    f"**{expense.get('expected_month', '---')}　"
-                    f"{expense.get('name', '')}"
-                    f"（{expense.get('category', '')}）："
-                    f"{expense.get('amount', 0):,.1f}万円**"
-                )
+                distribution_months = int(expense.get("distribution_months", 1) or 1)
+
+                if distribution_months > 1:
+                    end_month = distribution_end_month(expense)
+                    monthly_amount = expense.get("amount", 0) / distribution_months
+                    st.write(
+                        f"**{expense.get('expected_month', '---')}〜{end_month}　"
+                        f"{expense.get('name', '')}"
+                        f"（{expense.get('category', '')}）：合計"
+                        f"{expense.get('amount', 0):,.1f}万円"
+                        f"（{distribution_months}か月に分散・月あたり約"
+                        f"{monthly_amount:,.1f}万円）**"
+                    )
+                else:
+                    st.write(
+                        f"**{expense.get('expected_month', '---')}　"
+                        f"{expense.get('name', '')}"
+                        f"（{expense.get('category', '')}）："
+                        f"{expense.get('amount', 0):,.1f}万円**"
+                    )
+
                 if expense.get("memo"):
                     st.caption(expense["memo"])
 
@@ -454,6 +491,43 @@ if run:
         st.write(f"**{budget_explanation.binding_summary}**")
         for detail in budget_explanation.details:
             st.write(f"- {detail}")
+
+    record_monthly_judgment(
+        current_month,
+        safe_monthly=monthly_budget.safe_monthly,
+        recommended_monthly=monthly_budget.recommended_monthly,
+        max_monthly=monthly_budget.max_monthly,
+        status=monthly_budget.status,
+        binding_safe_factor_reason=monthly_budget.binding_safe_factor_reason,
+        path=JUDGMENT_TREND_PATH,
+    )
+
+    st.subheader("4.5. 今月のFIRE判定の推移")
+
+    judgment_trend_records = load_judgment_trend(path=JUDGMENT_TREND_PATH)
+
+    if len(judgment_trend_records) >= 2:
+        trend_df = pd.DataFrame(judgment_trend_records).set_index("month")[
+            ["safe_monthly", "recommended_monthly", "max_monthly"]
+        ]
+        trend_df.columns = ["安全生活費", "推奨生活費", "上限生活費"]
+
+        st.line_chart(trend_df, use_container_width=True)
+
+        trend_status_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+        st.caption(
+            "ガードレール状態の推移： "
+            + "　".join(
+                f"{record['month']}{trend_status_emoji.get(record['status'], '')}"
+                for record in judgment_trend_records
+            )
+        )
+    else:
+        st.caption(
+            "記録された月が2か月未満のため、推移グラフはまだ表示できません。"
+            "シミュレーションを実行するたびに、今月の判定が自動的に記録されます"
+            "（同じ月内に複数回実行した場合は最新の結果で上書きされます）。"
+        )
 
     st.subheader("5. 今月の推奨行動")
 
