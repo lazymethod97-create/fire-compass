@@ -16,7 +16,10 @@ from services.large_expense_engine import (
     load_large_expenses,
     total_for_month,
 )
+from services.market_data_engine import MarketDataError, fetch_market_condition
 from services.monthly_budget_engine import calculate_monthly_budget
+from services.budget_explanation import build_budget_explanation
+from services.sequence_risk_engine import calculate_sequence_risk_factor
 from services.withdrawal_engine import calculate_withdrawal_plan
 from services.history_manager import (
     clear_history,
@@ -52,6 +55,18 @@ def _safe_log_event(event_type: str, message: str, level: str = "INFO") -> None:
         )
     except Exception:
         pass
+
+
+@st.cache_data(ttl=3600)
+def _cached_fetch_market_condition():
+    """市場データの自動取得結果を1時間キャッシュする。
+
+    yfinanceは非公式ライブラリのためAPI呼び出しの安定性が保証されておらず、
+    また画面の再描画のたびに毎回問い合わせるとレート制限に触れやすいため、
+    キャッシュを挟む。取得に失敗した場合、Streamlitはこの結果をキャッシュ
+    しないため、次回の再描画で再試行される。
+    """
+    return fetch_market_condition()
 
 
 st.title("🧭 FIRE Compass")
@@ -157,10 +172,41 @@ with c10:
     )
 
 with c11:
+    auto_market_result = None
+    try:
+        auto_market_result = _cached_fetch_market_condition()
+    except MarketDataError:
+        auto_market_result = None
+
+    condition_options = ["通常", "弱気相場", "暴落", "深刻な暴落"]
+    default_index = (
+        condition_options.index(auto_market_result.condition)
+        if auto_market_result is not None
+        else 0
+    )
+
     market_condition = st.selectbox(
         "現在の市場環境",
-        ["通常", "弱気相場", "暴落", "深刻な暴落"],
+        condition_options,
+        index=default_index,
+        help=(
+            "S&P500の過去最高値からの下落率をもとに自動で初期値を提案します"
+            "（取得できない場合は「通常」を初期値とします）。"
+            "手動でいつでも変更できます。"
+        ),
     )
+
+    if auto_market_result is not None:
+        st.caption(
+            f"自動判定：S&P500は過去最高値（{auto_market_result.all_time_high:,.0f}）から"
+            f"{auto_market_result.drawdown_pct * 100:.1f}%下落しており、"
+            f"「{auto_market_result.condition}」を提案しています"
+            "（手動で変更可能です）。"
+        )
+    else:
+        st.caption(
+            "市場データの自動取得に失敗したため、手動で選択してください。"
+        )
 
 st.subheader("3.5. 今月以降の大型支出予定")
 
@@ -249,6 +295,22 @@ if large_expenses:
 else:
     st.caption("登録済みの大型支出予定はありません。")
 
+st.subheader("3.6. 年金受給開始年齢（ステージ判定用）")
+
+st.caption(
+    "60歳〜受給開始前／受給開始〜74歳／75歳以降のステージを判定し、"
+    "今月の安全生活費の算出に反映します。詳細な年金額・NISA・iDeCoの"
+    "設定はシミュレーション実行後の「8. NISA・iDeCo・年金最適化」で行います。"
+)
+
+pension_start_age = st.number_input(
+    "年金受給開始年齢",
+    min_value=65,
+    max_value=75,
+    value=65,
+    step=1,
+)
+
 run = st.button(
     "🧭 FIREシミュレーションを実行",
     type="primary",
@@ -283,11 +345,24 @@ if run:
         current_month,
     )
 
+    sequence_risk_result = calculate_sequence_risk_factor(
+        current_age=current_age,
+        pension_start_age=pension_start_age,
+        total_assets=current_assets,
+        annual_spending=annual_spending,
+        annual_side_income=annual_side_income,
+        expected_return_pct=expected_return,
+        inflation_pct=inflation,
+    )
+
     monthly_budget = calculate_monthly_budget(
         fire_result=result,
         action_result=base_action,
         market_crash=market_condition in ("暴落", "深刻な暴落"),
         upcoming_large_expense=this_month_large_expense_total,
+        current_age=current_age,
+        pension_start_age=pension_start_age,
+        sequence_risk_factor=sequence_risk_result.risk_factor,
     )
 
     strategy = calculate_crash_strategy(
@@ -364,17 +439,21 @@ if run:
         "市場暴落時は自動的に安全側に調整されます。"
     )
 
-    if this_month_large_expense_total > 0.005:
-        if "large_expense_exceeds_cash_surplus" in monthly_budget.reasons:
-            st.warning(
-                f"今月は大型支出の予定が{this_month_large_expense_total:,.1f}万円あり、"
-                "現金の余力を超えているため判定を1段階厳しくしています。"
-            )
-        else:
-            st.caption(
-                f"今月は大型支出の予定が{this_month_large_expense_total:,.1f}万円ありますが、"
-                "現金の余力の範囲内のため判定は変更していません。"
-            )
+    if "early_retirement_stage" in monthly_budget.reasons:
+        st.caption(
+            "60歳〜年金受給開始前の期間は、シーケンス・オブ・リターンズ・"
+            "リスク（早期に相場が下落した場合の影響の大きさ）を踏まえた"
+            "調整を行っています。詳しくは下の「判定の根拠」をご覧ください。"
+        )
+
+    budget_explanation = build_budget_explanation(
+        monthly_budget.reasons, monthly_budget.binding_safe_factor_reason
+    )
+
+    with st.expander("📋 この判定の根拠を見る"):
+        st.write(f"**{budget_explanation.binding_summary}**")
+        for detail in budget_explanation.details:
+            st.write(f"- {detail}")
 
     st.subheader("5. 今月の推奨行動")
 
@@ -407,7 +486,7 @@ if run:
     st.info(strategy.reason)
 
     st.caption(
-        "Sprint 3では、市場環境に応じて現金バッファ・生活費・追加投資ルールを調整します。"
+        "市場環境に応じて現金バッファ・生活費・追加投資ルールを調整します。"
         "総資産シミュレーションそのものには二重計上しません。"
     )
 
@@ -489,6 +568,18 @@ if run:
             value=0.0,
             step=10.0,
         )
+        taxable_gain_ratio_pct = st.slider(
+            "課税口座の含み益割合（%）",
+            min_value=0,
+            max_value=100,
+            value=30,
+            step=5,
+            help=(
+                "課税口座残高のうち含み益（購入時より値上がりした部分）の"
+                "割合の目安です。今月の取り崩しプランで、課税口座から売却"
+                "する場合の税金の目安計算に使用します。"
+            ),
+        )
         ideco_assets = st.number_input(
             "iDeCo現在残高（万円）",
             min_value=0.0,
@@ -516,12 +607,9 @@ if run:
             value=0.0,
             step=10.0,
         )
-        pension_start_age = st.number_input(
-            "年金受給開始年齢",
-            min_value=65,
-            max_value=75,
-            value=65,
-            step=1,
+        st.caption(
+            f"年金受給開始年齢: **{pension_start_age}歳**"
+            "（「3.6. 年金受給開始年齢」で設定した値を使用します）"
         )
 
     tax_result = run_tax_optimization(
@@ -587,6 +675,7 @@ if run:
         ideco_access_age=tax_result.ideco_access_age,
         pension_start_age=tax_result.pension_start_age,
         pension_monthly_income=tax_result.pension_monthly_income,
+        taxable_gain_ratio=taxable_gain_ratio_pct / 100.0,
     )
 
     if this_month_large_expense_total > 0.005:
@@ -606,6 +695,13 @@ if run:
             st.write(f"**{step.source}：{step.amount:,.1f}万円** — {step.reason}")
         else:
             st.caption(f"{step.source} — {step.reason}")
+
+    if withdrawal_plan.total_estimated_tax > 0.005:
+        st.caption(
+            f"今回のプランに含まれる課税口座の取り崩しにかかる税金の目安は"
+            f"合計{withdrawal_plan.total_estimated_tax:,.1f}万円です"
+            "（簡易的な目安であり、実際の税額とは異なる場合があります）。"
+        )
 
     if withdrawal_plan.dipped_into_cash_buffer:
         st.warning(

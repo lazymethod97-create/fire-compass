@@ -64,7 +64,8 @@ def calculate_crash_strategy(
 
     if condition == "通常":
         reason = (
-            "通常時なので、Sprint 2の通常ルールをそのまま使用します。"
+            "通常時なので、現金バッファ・生活費・追加投資は"
+            "通常ルールをそのまま使用します。"
         )
     elif condition == "弱気相場":
         reason = (
