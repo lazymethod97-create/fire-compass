@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import pandas as pd
 import yfinance as yf
 
+from services.crash_strategy import STRATEGIES as _CRASH_STRATEGIES
+
 # Sprint 25で追加。S&P500の過去最高値からの下落率をもとに、
 # crash_strategy.STRATEGIESのキーと同じ市場環境ラベルを自動判定する。
 #
@@ -18,10 +20,31 @@ _NORMAL_CONDITION = "通常"
 
 # 下落率のしきい値（下から順に判定）。一般的な金融用語の定義に基づく：
 # 10%未満=通常、10〜20%未満=弱気相場、20〜35%未満=暴落、35%以上=深刻な暴落。
+#
+# Sprint 27で修正。しきい値の割合(0.10/0.20/0.35)自体はcrash_strategy.py
+# 側に定義がないため、ここに残すしかないが、対応するラベル文字列は
+# crash_strategy.STRATEGIESのキーをそのまま使う（このモジュールで独自に
+# 同じ文字列をハードコードしない）。crash_strategy.py（ロック済み）の
+# 市場環境の種類が将来増減した場合に、ラベルの表記だけが2箇所で
+# 食い違ってしまうのを防ぐための、唯一の情報源（single source of truth）
+# 化。万一crash_strategy.STRATEGIESのキーが変わってここと不整合になった
+# 場合は、モジュール読み込み時にAssertionErrorで検知する。
 _THRESHOLDS = (
     (0.35, "深刻な暴落"),
     (0.20, "暴落"),
     (0.10, "弱気相場"),
+)
+
+for _threshold, _condition_label in _THRESHOLDS:
+    assert _condition_label in _CRASH_STRATEGIES, (
+        f"market_data_engine._THRESHOLDSのラベル'{_condition_label}'が"
+        "crash_strategy.STRATEGIESに存在しません。"
+        "crash_strategy.pyの市場環境の種類が変更された場合は、"
+        "market_data_engine._THRESHOLDSも合わせて見直してください。"
+    )
+assert _NORMAL_CONDITION in _CRASH_STRATEGIES, (
+    f"market_data_engine._NORMAL_CONDITION'{_NORMAL_CONDITION}'が"
+    "crash_strategy.STRATEGIESに存在しません。"
 )
 
 

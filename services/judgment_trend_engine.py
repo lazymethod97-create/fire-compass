@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,17 +10,6 @@ DEFAULT_JUDGMENT_TREND_PATH = ".fire_compass_judgment_trend.json"
 _MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 STATUSES = ("green", "yellow", "red")
-
-
-@dataclass
-class MonthlyJudgment:
-    month: str  # "YYYY-MM"
-    safe_monthly: float
-    recommended_monthly: float
-    max_monthly: float
-    status: str  # "green" | "yellow" | "red"
-    binding_safe_factor_reason: str
-    recorded_at: str
 
 
 def _judgment_trend_path(path: str | Path | None = None) -> Path:

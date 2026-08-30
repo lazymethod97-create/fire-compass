@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -18,19 +17,6 @@ _MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 # 分けて計上）。1（分散なし・従来通り単月計上）が既存呼び出しとの
 # 後方互換のデフォルト値。
 DEFAULT_DISTRIBUTION_MONTHS = 1
-
-
-@dataclass
-class LargeExpense:
-    id: str
-    name: str
-    category: str
-    amount: float
-    expected_month: str  # "YYYY-MM"（分散開始月）
-    memo: str
-    created_at: str
-    # Sprint 26で追加。amountを何ヶ月に分散して計上するか（1以上の整数）。
-    distribution_months: int = DEFAULT_DISTRIBUTION_MONTHS
 
 
 def _validate_new_expense(
@@ -235,40 +221,6 @@ def total_for_month(
         total += month_amounts.get(target_month, 0.0)
 
     return round(total, 2)
-
-
-def expenses_for_month(
-    expenses: list[dict],
-    target_month: str,
-) -> list[dict]:
-    """target_monthに按分計上される大型支出の一覧を返す。
-
-    各要素は元のレコードのコピーに、その月に計上される按分額
-    "amount_for_month"を追加したもの。distribution_monthsが1（従来通り）
-    の支出はamount_for_month == amountとなる。
-    """
-    if not isinstance(expenses, list):
-        raise ValueError("expensesはリスト形式で指定してください。")
-
-    result: list[dict] = []
-    for item in expenses:
-        if not isinstance(item, dict):
-            continue
-
-        month_amounts = _month_amounts(
-            amount=item.get("amount", 0.0),
-            expected_month=str(item.get("expected_month", "")),
-            distribution_months=item.get(
-                "distribution_months", DEFAULT_DISTRIBUTION_MONTHS
-            ),
-        )
-
-        if target_month in month_amounts:
-            enriched = dict(item)
-            enriched["amount_for_month"] = month_amounts[target_month]
-            result.append(enriched)
-
-    return result
 
 
 def distribution_end_month(expense: dict) -> str:

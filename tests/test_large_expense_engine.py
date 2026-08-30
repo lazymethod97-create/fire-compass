@@ -3,7 +3,6 @@ import pytest
 from services.large_expense_engine import (
     add_large_expense,
     distribution_end_month,
-    expenses_for_month,
     load_large_expenses,
     total_for_month,
 )
@@ -122,19 +121,6 @@ def test_multiple_expenses_summed_in_same_month(expense_path):
 
     # 9月分割(30) + 10月分割(30) + 車検(12) = 42
     assert total_for_month(expenses, "2026-10") == 42.0
-
-
-def test_expenses_for_month_returns_amount_for_month(expense_path):
-    add_large_expense(
-        "沖縄旅行", "旅行", 90.0, "2026-09", distribution_months=3, path=expense_path
-    )
-
-    expenses = load_large_expenses(path=expense_path)
-    october_entries = expenses_for_month(expenses, "2026-10")
-
-    assert len(october_entries) == 1
-    assert october_entries[0]["amount_for_month"] == 30.0
-    assert october_entries[0]["amount"] == 90.0  # 元の合計額は変更しない
 
 
 def test_distribution_end_month(expense_path):
