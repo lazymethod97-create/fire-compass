@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from services.ai_advisor import generate_ai_advice
+from services.ai_advisor import generate_ai_advice, generate_portfolio_commentary
 from services.action_engine import calculate_monthly_action
 from services.app_logger import log_event
 from services.crash_strategy import calculate_crash_strategy
@@ -35,6 +35,12 @@ from services.history_manager import (
     save_history,
 )
 from services.tax_optimization import TaxOptimizationInput, run_tax_optimization
+from services.asset_import_engine import (
+    AssetImportError,
+    decode_csv_bytes,
+    parse_sbi_fund_holdings_csv,
+)
+from services.portfolio_balance_engine import analyze_portfolio_balance
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
@@ -75,6 +81,112 @@ def _cached_fetch_market_condition():
 
 st.title("🧭 FIRE Compass")
 st.caption("FIRE後の「今月いくら使っていいか・どこから取り崩すか」を判断するためのアプリ")
+
+st.subheader("0. 保有資産の取り込み（証券会社CSV）")
+st.caption(
+    "SBI証券の「保有ファンド一覧」CSVをアップロードすると、下の"
+    "「課税口座残高」「NISA現在残高」「NISA累計投資額・簿価」"
+    "「うち成長投資枠の累計投資額」の初期値に反映します。"
+    "現金・iDeCoの残高、今年のNISA投資額はCSVに含まれないため、"
+    "引き続き手入力してください。"
+)
+
+uploaded_asset_csv = st.file_uploader(
+    "保有ファンド一覧CSV（SBI証券）",
+    type="csv",
+    key="asset_import_csv",
+)
+
+if uploaded_asset_csv is not None:
+    if uploaded_asset_csv.file_id != st.session_state.get(
+        "_asset_import_processed_id"
+    ):
+        try:
+            csv_text = decode_csv_bytes(uploaded_asset_csv.getvalue())
+            import_result = parse_sbi_fund_holdings_csv(csv_text)
+        except AssetImportError as error:
+            st.error(f"CSVの取り込みに失敗しました: {error}")
+            st.session_state.pop("_asset_import_processed_id", None)
+            st.session_state.pop("_asset_import_result", None)
+        else:
+            st.session_state["taxable_assets"] = import_result.taxable_assets
+            st.session_state["nisa_assets"] = import_result.nisa_assets
+            st.session_state["nisa_contributed"] = import_result.nisa_contributed
+            st.session_state["nisa_growth_contributed"] = (
+                import_result.nisa_growth_contributed
+            )
+            st.session_state["_asset_import_processed_id"] = (
+                uploaded_asset_csv.file_id
+            )
+            st.session_state["_asset_import_result"] = import_result
+
+            balance_result = analyze_portfolio_balance(import_result.holdings)
+            st.session_state["_asset_import_balance"] = balance_result
+            with st.spinner("保有ファンドのバランスを評価しています..."):
+                st.session_state["_asset_import_commentary"] = (
+                    generate_portfolio_commentary(balance_result)
+                )
+
+            _safe_log_event(
+                "asset_csv_imported",
+                f"保有ファンドCSVを取り込みました（{len(import_result.holdings)}件）。",
+            )
+
+    cached_import_result = st.session_state.get("_asset_import_result")
+    if cached_import_result is not None:
+        combined_investment_total = round(
+            cached_import_result.taxable_assets + cached_import_result.nisa_assets, 2
+        )
+        st.success(
+            f"{len(cached_import_result.holdings)}件の保有ファンドを取り込み済みです。"
+            f"課税口座残高: {cached_import_result.taxable_assets:,.1f}万円 / "
+            f"NISA残高: {cached_import_result.nisa_assets:,.1f}万円 / "
+            f"NISA累計投資額: {cached_import_result.nisa_contributed:,.1f}万円"
+            f"（うち成長投資枠: {cached_import_result.nisa_growth_contributed:,.1f}万円）"
+        )
+        st.caption(
+            f"課税口座＋NISAの合計は{combined_investment_total:,.1f}万円です。"
+            "現金・iDeCoの残高と合わせて、必要であれば「現在の総金融資産」欄を"
+            "ご確認・更新してください（自動では上書きしません）。"
+            "下の入力欄は取り込み後も手動で調整できます。"
+        )
+
+        for warning in cached_import_result.warnings:
+            st.caption(f"⚠️ {warning}")
+
+        with st.expander("取り込んだファンドの内訳を見る"):
+            for holding in cached_import_result.holdings:
+                st.write(
+                    f"- {holding.fund_name}（{holding.account_type}）："
+                    f"評価額 {holding.valuation_amount:,.1f}万円 / "
+                    f"買付額 {holding.purchase_amount:,.1f}万円"
+                )
+
+        cached_balance_result = st.session_state.get("_asset_import_balance")
+        if cached_balance_result is not None and cached_balance_result.by_fund:
+            st.markdown("**保有ファンドのバランス評価**")
+
+            b1, b2 = st.columns(2)
+            with b1:
+                st.caption("カテゴリ別配分")
+                for slice_ in cached_balance_result.by_category:
+                    st.write(f"- {slice_.label}：{slice_.weight_pct:.1f}%")
+            with b2:
+                st.caption("口座種別の配分")
+                for slice_ in cached_balance_result.by_account_type:
+                    st.write(f"- {slice_.label}：{slice_.weight_pct:.1f}%")
+
+            for warning in cached_balance_result.concentration_warnings:
+                st.warning(warning)
+
+            cached_commentary = st.session_state.get("_asset_import_commentary")
+            if cached_commentary:
+                with st.expander("📋 保有ファンドのバランス総評を見る", expanded=True):
+                    st.markdown(cached_commentary)
+                    st.caption(
+                        "※配分の事実に基づく解説であり、売買を推奨するものでは"
+                        "ありません。最終判断はご自身で行ってください。"
+                    )
 
 st.subheader("1. FIRE基本情報")
 
@@ -614,6 +726,7 @@ if run:
             min_value=0.0,
             value=0.0,
             step=10.0,
+            key="nisa_assets",
         )
         nisa_contributed = st.number_input(
             "NISA累計投資額・簿価（万円）",
@@ -621,12 +734,14 @@ if run:
             value=0.0,
             step=10.0,
             help="NISAの非課税保有限度額は取得価額（簿価）ベースです。",
+            key="nisa_contributed",
         )
         nisa_growth_contributed = st.number_input(
             "うち成長投資枠の累計投資額（万円）",
             min_value=0.0,
             value=0.0,
             step=10.0,
+            key="nisa_growth_contributed",
         )
         nisa_annual_contributed = st.number_input(
             "今年のNISA投資額（万円）",
@@ -641,6 +756,7 @@ if run:
             min_value=0.0,
             value=0.0,
             step=10.0,
+            key="taxable_assets",
         )
         taxable_gain_ratio_pct = st.slider(
             "課税口座の含み益割合（%）",
