@@ -41,6 +41,7 @@ from services.asset_import_engine import (
     parse_sbi_fund_holdings_csv,
 )
 from services.portfolio_balance_engine import analyze_portfolio_balance
+from services.social_insurance_engine import calculate_social_insurance
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
@@ -460,6 +461,76 @@ pension_start_age = st.number_input(
     step=1,
 )
 
+st.subheader("3.7. 社会保険料（国民健康保険・国民年金）")
+
+st.caption(
+    "FIRE後は給与天引きがなくなり、国民健康保険料・国民年金保険料を"
+    "自分で納付する必要があります。ここで算出した月額目安は、"
+    "「4. 今月のFIRE判定」の安全・推奨・上限生活費から直接差し引かれます。"
+    "国民健康保険料は自治体ごとに料率が異なるため、ここでの金額は"
+    "全国的な簡易モデルによる概算です。正確な金額は居住自治体でご確認ください。"
+)
+
+si1, si2 = st.columns(2)
+
+with si1:
+    prior_year_income = st.number_input(
+        "前年の年間所得目安（万円）",
+        min_value=0.0,
+        value=0.0,
+        step=10.0,
+        help=(
+            "給与所得だけでなく、課税口座の譲渡益・配当など"
+            "国民健康保険料の所得割算定に含まれる所得の合計を目安として"
+            "入力してください。FIRE直後の1〜2年は在職中の高い所得が"
+            "基準になる点にご注意ください。"
+        ),
+    )
+
+with si2:
+    household_size = st.number_input(
+        "世帯人数（国保加入者数）",
+        min_value=1,
+        max_value=10,
+        value=1,
+        step=1,
+        help="均等割の算定に使用します。国民健康保険に加入する世帯人数です。",
+    )
+
+social_insurance_result = calculate_social_insurance(
+    prior_year_income=prior_year_income,
+    household_size=int(household_size),
+    current_age=current_age,
+)
+
+si_m1, si_m2, si_m3 = st.columns(3)
+
+si_m1.metric(
+    "国民健康保険料（月額目安）",
+    f"{social_insurance_result.monthly_health_insurance:,.1f}万円",
+)
+
+si_m2.metric(
+    "国民年金保険料（月額目安）",
+    f"{social_insurance_result.monthly_national_pension:,.1f}万円",
+)
+
+si_m3.metric(
+    "社会保険料合計（月額目安）",
+    f"{social_insurance_result.monthly_total:,.1f}万円",
+)
+
+with st.expander("国民健康保険料の内訳を見る"):
+    for component in social_insurance_result.health_insurance_components:
+        capped_note = "（賦課限度額に到達）" if component.capped else ""
+        st.write(
+            f"- {component.label}：所得割 {component.income_levy:,.1f}万円 ＋ "
+            f"均等割 {component.per_capita_levy:,.1f}万円 ＝ "
+            f"{component.capped_amount:,.1f}万円{capped_note}"
+        )
+    for note in social_insurance_result.notes:
+        st.caption(f"※ {note}")
+
 run = st.button(
     "🧭 FIREシミュレーションを実行",
     type="primary",
@@ -512,6 +583,7 @@ if run:
         current_age=current_age,
         pension_start_age=pension_start_age,
         sequence_risk_factor=sequence_risk_result.risk_factor,
+        monthly_social_insurance=social_insurance_result.monthly_total,
     )
 
     strategy = calculate_crash_strategy(
@@ -593,6 +665,13 @@ if run:
             "60歳〜年金受給開始前の期間は、シーケンス・オブ・リターンズ・"
             "リスク（早期に相場が下落した場合の影響の大きさ）を踏まえた"
             "調整を行っています。詳しくは下の「判定の根拠」をご覧ください。"
+        )
+
+    if "social_insurance_deducted" in monthly_budget.reasons:
+        st.caption(
+            f"国民健康保険料・国民年金保険料の月額目安"
+            f"（{social_insurance_result.monthly_total:,.1f}万円）を"
+            "安全・推奨・上限生活費から差し引いています。"
         )
 
     budget_explanation = build_budget_explanation(

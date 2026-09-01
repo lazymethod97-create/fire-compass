@@ -56,6 +56,10 @@ _REASON_LABELS = {
         "今月以降に予定されている大型支出はありますが、現金の余力の範囲内の"
         "ため判定への影響はありません。"
     ),
+    "social_insurance_deducted": (
+        "国民健康保険料・国民年金保険料の月額目安を、安全・推奨・上限生活費"
+        "から直接差し引いています。"
+    ),
 }
 
 # 表示順序（安全生活費の判定に関わる主要因 → ステージ調整 → 系列リスク →
@@ -72,6 +76,7 @@ _DISPLAY_ORDER = (
     "upside_allowed",
     "large_expense_exceeds_cash_surplus",
     "large_expense_within_cash_surplus",
+    "social_insurance_deducted",
 )
 
 # binding_safe_factor_reason → 一覧の先頭に出す「今、何が一番効いているか」

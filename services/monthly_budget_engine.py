@@ -79,6 +79,7 @@ def calculate_monthly_budget(
     current_age: Optional[int] = None,
     pension_start_age: Optional[int] = None,
     sequence_risk_factor: Optional[float] = None,
+    monthly_social_insurance: float = 0.0,
 ) -> MonthlyBudgetResult:
     """run_fire_simulationとcalculate_monthly_actionの出力から、
     今月の安全生活費・推奨生活費・上限生活費とガードレール判定を算出する。
@@ -123,6 +124,17 @@ def calculate_monthly_budget(
     最終的に採用された係数がどの要因によるものかを示すタグで、reasons内の
     いずれかのタグと一致する。services.budget_explanationが「今、何が
     一番効いているか」を説明する際に使用する。
+
+    monthly_social_insurance（Sprint 30で追加、省略可能・デフォルト0.0）は、
+    services.social_insurance_engineで算出した国民健康保険料・国民年金
+    保険料の月額合計（万円）。FIRE後は給与天引きがなくなり自分で納付する
+    必要がある固定費であるため、係数調整ではなく安全・推奨・上限生活費
+    それぞれから直接差し引く（0円未満にはならないようフロア処理する）。
+    デフォルト0.0の場合は既存呼び出しと完全に同じ挙動になる。
+    ガードレール判定（green/yellow/red）自体はこの引数によって変化しない
+    （他の格下げ要因と異なり、格下げ判定ではなく金額の直接控除のみを
+    行う設計。既存のupcoming_large_expenseによるgreen→yellow格下げ判定は
+    差し引き後の金額ではなく従来通りcash_surplusとの比較で行う）。
     """
     if upcoming_large_expense < 0:
         raise ValueError("大型支出予定の合計額は0以上にしてください。")
@@ -132,6 +144,9 @@ def calculate_monthly_budget(
 
     if pension_start_age is not None and pension_start_age < 0:
         raise ValueError("年金受給開始年齢は0以上にしてください。")
+
+    if monthly_social_insurance < 0:
+        raise ValueError("社会保険料の月額は0以上にしてください。")
 
     recommended_monthly = fire_result.recommended_monthly_spending
     reasons: List[str] = []
@@ -224,6 +239,18 @@ def calculate_monthly_budget(
                 status = "yellow"
         else:
             reasons.append("large_expense_within_cash_surplus")
+
+    # --- 社会保険料（国保・国民年金）の直接控除（Sprint 30） ---
+    # 係数調整ではなく、FIRE後に自分で納付が必要になる固定費として、
+    # 安全・推奨・上限生活費それぞれから直接差し引く。ガードレール判定
+    # （green/yellow/red）自体はこの控除によって変化しない。
+    if monthly_social_insurance > 0.005:
+        safe_monthly = round(max(safe_monthly - monthly_social_insurance, 0.0), 2)
+        recommended_monthly = round(
+            max(recommended_monthly - monthly_social_insurance, 0.0), 2
+        )
+        max_monthly = round(max(max_monthly - monthly_social_insurance, 0.0), 2)
+        reasons.append("social_insurance_deducted")
 
     return MonthlyBudgetResult(
         safe_monthly=safe_monthly,
