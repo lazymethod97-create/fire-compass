@@ -579,6 +579,7 @@ if run:
         fire_result=result,
         action_result=base_action,
         market_crash=market_condition in ("暴落", "深刻な暴落"),
+        bear_market=market_condition == "弱気相場",
         upcoming_large_expense=this_month_large_expense_total,
         current_age=current_age,
         pension_start_age=pension_start_age,
@@ -683,6 +684,20 @@ if run:
         for detail in budget_explanation.details:
             st.write(f"- {detail}")
 
+        if sequence_risk_result.life_stage_applicable and (
+            "sequence_risk_evaluated" in monthly_budget.reasons
+            or "sequence_risk_applied" in monthly_budget.reasons
+        ):
+            st.caption(
+                "シーケンス・オブ・リターンズ・リスクの評価内訳："
+                f"直近{sequence_risk_result.window_years}年分のリターン"
+                f"パターンを{sequence_risk_result.n_simulations:,}回"
+                f"シミュレーションしたうち、"
+                f"{sequence_risk_result.bad_path_ratio * 100:.1f}%で"
+                "資産が枯渇しました（この割合が高いほど、安全生活費の調整が"
+                "厳しくなります）。"
+            )
+
     record_monthly_judgment(
         current_month,
         safe_monthly=monthly_budget.safe_monthly,
@@ -744,7 +759,7 @@ if run:
     )
 
     a4.metric(
-        "推奨月間生活費",
+        "市場ルール上の生活費目安",
         f"{strategy.recommended_monthly_spending:,.1f}万円",
     )
 
@@ -753,6 +768,13 @@ if run:
     st.caption(
         "市場環境に応じて現金バッファ・生活費・追加投資ルールを調整します。"
         "総資産シミュレーションそのものには二重計上しません。"
+    )
+    st.caption(
+        "※この「市場ルール上の生活費目安」は、市場環境（弱気相場〜深刻な"
+        "暴落）による生活費削減率のみを反映した参考値です。安全余裕率・"
+        "社会保険料・悲観ケース判定などを反映した「4. 今月のFIRE判定」の"
+        "生活費とは計算方法が異なるため、金額が一致しない場合があります。"
+        "実際に今月使ってよい金額は「4. 今月のFIRE判定」を優先してください。"
     )
 
     st.subheader("6. 市場環境別の防御ルール")
@@ -1064,6 +1086,13 @@ if run:
     m4.metric(
         "資産寿命",
         result.asset_depletion_label,
+    )
+
+    st.caption(
+        "※このセクションの「推奨月間支出」は、安全余裕率のみを反映した"
+        "シミュレーションの基礎数値です。市場環境・社会保険料・悲観ケース"
+        "判定などを反映した実際の生活費の目安は「4. 今月のFIRE判定」を"
+        "ご覧ください。"
     )
 
     st.info(result.advice)

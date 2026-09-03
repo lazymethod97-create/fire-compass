@@ -26,6 +26,10 @@ _REASON_LABELS = {
         "現金バッファは目標水準を満たしており、通常通りの安全生活費を"
         "算出しています。"
     ),
+    "bear_market_active": (
+        "市場が弱気相場と判定されているため、安全生活費を通常の95%に"
+        "抑えています。"
+    ),
     "early_retirement_stage": (
         "早期リタイア期（60歳〜年金受給開始前）にあたるため、安全生活費を"
         "通常の95%に抑える調整を行っています。"
@@ -69,6 +73,7 @@ _DISPLAY_ORDER = (
     "bear_case_depletes",
     "cash_buffer_below_target",
     "cash_buffer_healthy",
+    "bear_market_active",
     "early_retirement_stage",
     "late_stage_conservative",
     "sequence_risk_applied",
@@ -85,6 +90,7 @@ _BINDING_LABELS = {
     "market_crash_active": "市場の暴落局面",
     "bear_case_depletes": "資産寿命シミュレーションの悲観ケース",
     "cash_buffer_below_target": "現金バッファ不足",
+    "bear_market_active": "市場の弱気相場局面",
     "early_retirement_stage": "早期リタイア期の調整",
     "late_stage_conservative": "75歳以降の保守的な調整",
     "sequence_risk_applied": "早期リタイア期のシーケンス・オブ・リターンズ・リスク",

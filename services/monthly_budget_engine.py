@@ -25,6 +25,11 @@ _SAFE_FACTOR_HEALTHY = 1.00
 _SAFE_FACTOR_SHORTAGE = 0.85
 _SAFE_FACTOR_BEAR_DEPLETES = 0.70
 _SAFE_FACTOR_CRASH = 0.60
+# Sprint 31で追加。crash_strategy.STRATEGIESの「弱気相場」（生活費5%減）と
+# 方向性を合わせるための、より緩やかな係数。市場暴落・悲観ケース枯渇・
+# 現金バッファ不足のいずれにも該当しない場合にのみ適用する
+# （既存の係数の方が厳しい場合は、その既存係数を優先する）。
+_SAFE_FACTOR_BEAR_MARKET = 0.95
 
 _MAX_FACTOR_HEALTHY = 1.15
 _MAX_FACTOR_NEUTRAL = 1.00
@@ -75,6 +80,7 @@ def calculate_monthly_budget(
     fire_result: FireResult,
     action_result: ActionResult,
     market_crash: bool = False,
+    bear_market: bool = False,
     upcoming_large_expense: float = 0.0,
     current_age: Optional[int] = None,
     pension_start_age: Optional[int] = None,
@@ -89,6 +95,18 @@ def calculate_monthly_budget(
 
     market_crashは暴落検知機能が実装されるまでの暫定引数。
     将来のSprintで市場データと連動させる想定。
+
+    bear_market（Sprint 31で追加、省略可能・デフォルトFalse）は、
+    market_condition（services.crash_strategy）が「弱気相場」と判定された
+    ことを示す。従来はmarket_crash（暴落・深刻な暴落のみ）を渡しても
+    弱気相場では安全生活費が一切調整されず、crash_strategy側の生活費
+    5%減ルールとの間で見た目の不整合があったため追加した。市場暴落・
+    悲観ケース枯渇・現金バッファ不足のいずれにも該当しない場合にのみ、
+    安全生活費を通常の95%に抑え、上限生活費の上乗せ（upside_allowed）を
+    無効化し、ガードレール判定をyellowにする。他のいずれかの要因が
+    既に適用されている場合は、その要因をそのまま優先する
+    （bear_market単独では、より厳しい既存の判定を上書きしない）。
+    デフォルトFalseの場合は既存呼び出しと完全に同じ挙動になる。
 
     upcoming_large_expenseは今月に予定されている大型支出（旅行・車・医療等）
     の合計額（万円）。デフォルト0.0は既存呼び出しと完全に同じ挙動になる。
@@ -178,6 +196,10 @@ def calculate_monthly_budget(
         safe_factor = _SAFE_FACTOR_SHORTAGE
         reasons.append("cash_buffer_below_target")
         binding_reason = "cash_buffer_below_target"
+    elif bear_market:
+        safe_factor = _SAFE_FACTOR_BEAR_MARKET
+        reasons.append("bear_market_active")
+        binding_reason = "bear_market_active"
     else:
         safe_factor = _SAFE_FACTOR_HEALTHY
         reasons.append("cash_buffer_healthy")
@@ -215,7 +237,7 @@ def calculate_monthly_budget(
     safe_monthly = round(recommended_monthly * safe_factor, 2)
 
     # --- 上限生活費の係数（余裕がある時だけ推奨より高くする） ---
-    if market_crash or bear_depletes or cash_shortage_ratio > 0.0:
+    if market_crash or bear_depletes or cash_shortage_ratio > 0.0 or bear_market:
         max_factor = _MAX_FACTOR_NEUTRAL
     else:
         max_factor = _MAX_FACTOR_HEALTHY
@@ -226,7 +248,7 @@ def calculate_monthly_budget(
     # --- ガードレール判定 ---
     if market_crash or bear_depletes:
         status = "red"
-    elif cash_shortage_ratio > 0.0:
+    elif cash_shortage_ratio > 0.0 or bear_market:
         status = "yellow"
     else:
         status = "green"

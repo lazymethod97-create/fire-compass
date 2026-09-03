@@ -45,6 +45,11 @@ class SequenceRiskResult:
     risk_factor: float
     bad_path_ratio: float
     reasons: List[str] = field(default_factory=list)
+    # Sprint 31で追加。表示層（app.py）がbad_path_ratioを説明する際に
+    # 「何年分を」「何回」シミュレーションしたかをハードコードせず参照
+    # できるようにするための参考情報。計算ロジックには影響しない。
+    window_years: int = _WINDOW_YEARS
+    n_simulations: int = _N_SIMULATIONS
 
 
 def _is_early_retirement_stage(current_age: int, pension_start_age: int) -> bool:
@@ -212,4 +217,6 @@ def calculate_sequence_risk_factor(
         risk_factor=risk_factor,
         bad_path_ratio=round(bad_path_ratio, 4),
         reasons=reasons,
+        window_years=window_years,
+        n_simulations=n_simulations,
     )
