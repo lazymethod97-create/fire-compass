@@ -31,6 +31,14 @@ st.caption(
     "外部サービスへの送信は行いません。"
 )
 
+if st.session_state.get("simple_mode", True):
+    st.info(
+        "現在は簡易モードです。このログ・監視機能は詳細モードでのみ"
+        "使用できます。「FIRE Compass」画面上部の「🗂️ 簡易モード」"
+        "トグルをオフにしてから、改めてこのページを開いてください。"
+    )
+    st.stop()
+
 level_filter = st.selectbox(
     "表示するレベル",
     ["すべて", "ERROR", "WARNING", "INFO"],

@@ -18,13 +18,17 @@ status = build_security_status(
     history_path=".fire_compass_history.json",
 )
 
-if status["public_mode"]:
-    st.success("公開モードが有効です。履歴はStreamlitセッション単位で分離されます。")
-else:
-    st.warning(
-        "公開モードは無効です。公開サービスとして運用する場合は "
-        "FIRE_COMPASS_PUBLIC_MODE=1 を設定してください。"
+if not status["public_mode"]:
+    st.info(
+        "現在は非公開モード（ローカル個人利用）で動作しています。"
+        "このページの内容は、アプリを公開サービスとして運用する場合にのみ"
+        "関係します。公開運用する場合は、環境変数 "
+        "`FIRE_COMPASS_PUBLIC_MODE=1` を設定してから改めてこのページを"
+        "開いてください。"
     )
+    st.stop()
+
+st.success("公開モードが有効です。履歴はStreamlitセッション単位で分離されます。")
 
 c1, c2, c3 = st.columns(3)
 with c1:

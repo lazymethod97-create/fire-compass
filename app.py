@@ -258,7 +258,11 @@ with st.container(border=True):
             )
             st.rerun()
 
-    st.caption("今月の確認事項（チェック状態は次回起動時も保持されます）:")
+    st.caption(
+        "今月の確認事項（チェック状態は次回起動時も保持されます）。"
+        "※このチェックリストは表示用のメモであり、FIREの判定計算には"
+        "一切使用されません。"
+    )
     for _display_item_id, _display_label in CHECKLIST_ITEMS:
         st.checkbox(
             _display_label,
@@ -1069,7 +1073,7 @@ if run:
         f"**{strategy.label}：{recommended_action}**"
     )
 
-    a1, a2, a3, a4 = st.columns(4)
+    a1, a2, a3 = st.columns(3)
 
     a1.metric(
         "目標現金",
@@ -1086,24 +1090,25 @@ if run:
         f"{investment_withdrawal:,.1f}万円",
     )
 
-    a4.metric(
-        "市場ルール上の生活費目安",
-        f"{strategy.recommended_monthly_spending:,.1f}万円",
-    )
-
     st.info(strategy.reason)
 
     st.caption(
         "市場環境に応じて現金バッファ・生活費・追加投資ルールを調整します。"
         "総資産シミュレーションそのものには二重計上しません。"
     )
-    st.caption(
-        "※この「市場ルール上の生活費目安」は、市場環境（弱気相場〜深刻な"
-        "暴落）による生活費削減率のみを反映した参考値です。安全余裕率・"
-        "社会保険料・悲観ケース判定などを反映した「4. 今月のFIRE判定」の"
-        "生活費とは計算方法が異なるため、金額が一致しない場合があります。"
-        "実際に今月使ってよい金額は「4. 今月のFIRE判定」を優先してください。"
-    )
+
+    with st.expander("参考：市場ルール単体での生活費目安を見る"):
+        st.metric(
+            "市場ルール上の生活費目安",
+            f"{strategy.recommended_monthly_spending:,.1f}万円",
+        )
+        st.caption(
+            "※この「市場ルール上の生活費目安」は、市場環境（弱気相場〜深刻な"
+            "暴落）による生活費削減率のみを反映した参考値です。安全余裕率・"
+            "社会保険料・悲観ケース判定などを反映した「4. 今月のFIRE判定」の"
+            "生活費とは計算方法が異なるため、金額が一致しない場合があります。"
+            "実際に今月使ってよい金額は「4. 今月のFIRE判定」を優先してください。"
+        )
 
     with st.expander("🔍 詳細分析を見る（6〜12）", expanded=not simple_mode):
         st.subheader("6. 市場環境別の防御ルール")

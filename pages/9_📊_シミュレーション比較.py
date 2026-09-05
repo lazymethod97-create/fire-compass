@@ -28,6 +28,14 @@ st.caption(
     "保存済みのシミュレーション履歴を2〜4件選んで、主要な指標を並べて比較します。"
 )
 
+if st.session_state.get("simple_mode", True):
+    st.info(
+        "現在は簡易モードです。この比較機能は詳細モードでのみ使用できます。"
+        "「FIRE Compass」画面上部の「🗂️ 簡易モード」トグルをオフにしてから、"
+        "改めてこのページを開いてください。"
+    )
+    st.stop()
+
 records = load_history(path=HISTORY_PATH)
 
 if len(records) < MIN_RECORDS:
