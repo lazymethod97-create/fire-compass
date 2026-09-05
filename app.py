@@ -50,6 +50,12 @@ from services.actual_spending_engine import (
     load_actual_spending,
     record_actual_spending,
 )
+from services.checklist_state import (
+    CHECKLIST_ITEMS,
+    load_checklist_state,
+    reset_checklist_items,
+    save_checklist_state,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
@@ -57,12 +63,114 @@ EVENT_LOG_PATH = os.path.join(BASE_DIR, ".fire_compass_events.log")
 LARGE_EXPENSE_PATH = os.path.join(BASE_DIR, ".fire_compass_large_expenses.json")
 JUDGMENT_TREND_PATH = os.path.join(BASE_DIR, ".fire_compass_judgment_trend.json")
 ACTUAL_SPENDING_PATH = os.path.join(BASE_DIR, ".fire_compass_actual_spending.json")
+CHECKLIST_PATH = os.path.join(BASE_DIR, ".fire_compass_checklist.json")
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 st.set_page_config(
     page_title="FIRE Compass",
     page_icon="🧭",
     layout="wide",
 )
+
+# 前回入力の自動読み込み対象。各キーはウィジェットのkey名であり、
+# 「13. 保存・履歴管理」でhistoryに保存する際のinputsのキー名と一致させている。
+# 「現在の市場環境」はSprint25の自動判定ロジック（S&P500の下落率から毎回
+# その場で提案する）を優先するため、意図的にこの読み込み対象には含めない。
+PREVIOUS_INPUT_DEFAULTS = {
+    "current_age": 43,
+    "end_age": 90,
+    "current_assets": 4700.0,
+    "cash_assets": 800.0,
+    "annual_spending": 200.0,
+    "annual_side_income": 36.0,
+    "expected_return": 4.0,
+    "inflation": 2.0,
+    "safety_margin": 10,
+    "min_cash_months": 12.0,
+    "pension_start_age": 65,
+    "prior_year_income": 0.0,
+    "household_size": 1,
+    "nisa_assets": 0.0,
+    "nisa_contributed": 0.0,
+    "nisa_growth_contributed": 0.0,
+    "nisa_annual_contributed": 0.0,
+    "taxable_assets": 0.0,
+    "taxable_gain_ratio_pct": 30,
+    "ideco_assets": 0.0,
+    "ideco_monthly_contribution": 0.0,
+    "ideco_annual_limit": 74.4,
+    "annual_pension": 0.0,
+}
+
+
+def _latest_saved_inputs() -> tuple[dict, str | None]:
+    """保存済み履歴の最新レコードのinputsと、その保存日時を返す。
+
+    保存済み履歴が1件もない場合は空dictとNoneを返す。
+    計算ロジックには一切関与しない、読み込み専用のヘルパー。
+    """
+    records = load_history(path=HISTORY_PATH, limit=1)
+    if not records:
+        return {}, None
+
+    latest = records[0]
+    return latest.get("inputs", {}) or {}, latest.get("created_at")
+
+
+def _apply_previous_inputs_to_session_state(force: bool = False) -> None:
+    """前回保存した入力値をst.session_stateに流し込む。
+
+    force=False（デフォルト）はまだ値がないキーにのみ設定する、起動時の
+    自動反映用。force=Trueは既存の値を問答無用で上書きする、手動の
+    「読み込み直す」ボタン用。保存履歴側にキーが存在しない項目
+    （古い履歴レコードや、履歴が1件もない場合）はハードコードの
+    初期値にフォールバックする。
+    """
+    latest_inputs, _ = _latest_saved_inputs()
+
+    for key, hardcoded_default in PREVIOUS_INPUT_DEFAULTS.items():
+        value = latest_inputs.get(key, hardcoded_default)
+        if force:
+            st.session_state[key] = value
+        else:
+            st.session_state.setdefault(key, value)
+
+
+if not st.session_state.get("_previous_inputs_loaded"):
+    _apply_previous_inputs_to_session_state(force=False)
+    st.session_state["_previous_inputs_loaded"] = True
+
+
+if not st.session_state.get("_checklist_state_loaded"):
+    _loaded_checklist_state = load_checklist_state(path=CHECKLIST_PATH)
+    st.session_state.setdefault(
+        "simple_mode", _loaded_checklist_state["simple_mode"]
+    )
+    for _checklist_item_id, _ in CHECKLIST_ITEMS:
+        st.session_state.setdefault(
+            f"checklist_{_checklist_item_id}",
+            _checklist_item_id in _loaded_checklist_state["checked_items"],
+        )
+    st.session_state["_checklist_state_loaded"] = True
+
+
+def _persist_checklist_state() -> None:
+    """現在のsession_stateの表示モード・チェック状態をファイルへ保存する。
+
+    モード切替・チェックボックスのon_change・リセットボタンから呼ばれる。
+    """
+    checked_items = [
+        item_id
+        for item_id, _ in CHECKLIST_ITEMS
+        if st.session_state.get(f"checklist_{item_id}")
+    ]
+    save_checklist_state(
+        {
+            "simple_mode": st.session_state.get("simple_mode", True),
+            "checked_items": checked_items,
+        },
+        path=CHECKLIST_PATH,
+    )
+
 
 def _safe_log_event(event_type: str, message: str, level: str = "INFO") -> None:
     """イベントログの記録に失敗しても、アプリ本体の動作は止めない。"""
@@ -92,472 +200,634 @@ def _cached_fetch_market_condition():
 st.title("🧭 FIRE Compass")
 st.caption("FIRE後の「今月いくら使っていいか・どこから取り崩すか」を判断するためのアプリ")
 
-st.subheader("0. 保有資産の取り込み（証券会社CSV）")
-st.caption(
-    "SBI証券の「保有ファンド一覧」CSVをアップロードすると、下の"
-    "「課税口座残高」「NISA現在残高」「NISA累計投資額・簿価」"
-    "「うち成長投資枠の累計投資額」の初期値に反映します。"
-    "現金・iDeCoの残高、今年のNISA投資額はCSVに含まれないため、"
-    "引き続き手入力してください。"
-)
+_latest_inputs_preview, _latest_inputs_saved_at = _latest_saved_inputs()
 
-uploaded_asset_csv = st.file_uploader(
-    "保有ファンド一覧CSV（SBI証券）",
-    type="csv",
-    key="asset_import_csv",
-)
+with st.container(border=True):
+    reload_col1, reload_col2 = st.columns([4, 1])
 
-if uploaded_asset_csv is not None:
-    if uploaded_asset_csv.file_id != st.session_state.get(
-        "_asset_import_processed_id"
-    ):
-        try:
-            csv_text = decode_csv_bytes(uploaded_asset_csv.getvalue())
-            import_result = parse_sbi_fund_holdings_csv(csv_text)
-        except AssetImportError as error:
-            st.error(f"CSVの取り込みに失敗しました: {error}")
-            st.session_state.pop("_asset_import_processed_id", None)
-            st.session_state.pop("_asset_import_result", None)
+    with reload_col1:
+        if _latest_inputs_saved_at:
+            st.caption(
+                f"前回保存した入力値（{_latest_inputs_saved_at}）を、"
+                "下の各項目の初期値として自動で反映しています"
+                "（「現在の市場環境」を除く）。内容は自由に変更できます。"
+            )
         else:
-            st.session_state["taxable_assets"] = import_result.taxable_assets
-            st.session_state["nisa_assets"] = import_result.nisa_assets
-            st.session_state["nisa_contributed"] = import_result.nisa_contributed
-            st.session_state["nisa_growth_contributed"] = (
-                import_result.nisa_growth_contributed
+            st.caption(
+                "保存済みの履歴がまだないため、サンプルの初期値を表示しています。"
             )
-            st.session_state["_asset_import_processed_id"] = (
-                uploaded_asset_csv.file_id
-            )
-            st.session_state["_asset_import_result"] = import_result
 
-            balance_result = analyze_portfolio_balance(import_result.holdings)
-            st.session_state["_asset_import_balance"] = balance_result
-            with st.spinner("保有ファンドのバランスを評価しています..."):
-                st.session_state["_asset_import_commentary"] = (
-                    generate_portfolio_commentary(balance_result)
-                )
-
+    with reload_col2:
+        if st.button(
+            "🔄 前回の値を読み込み直す",
+            disabled=not _latest_inputs_saved_at,
+            use_container_width=True,
+        ):
+            _apply_previous_inputs_to_session_state(force=True)
             _safe_log_event(
-                "asset_csv_imported",
-                f"保有ファンドCSVを取り込みました（{len(import_result.holdings)}件）。",
-            )
-
-    cached_import_result = st.session_state.get("_asset_import_result")
-    if cached_import_result is not None:
-        combined_investment_total = round(
-            cached_import_result.taxable_assets + cached_import_result.nisa_assets, 2
-        )
-        st.success(
-            f"{len(cached_import_result.holdings)}件の保有ファンドを取り込み済みです。"
-            f"課税口座残高: {cached_import_result.taxable_assets:,.1f}万円 / "
-            f"NISA残高: {cached_import_result.nisa_assets:,.1f}万円 / "
-            f"NISA累計投資額: {cached_import_result.nisa_contributed:,.1f}万円"
-            f"（うち成長投資枠: {cached_import_result.nisa_growth_contributed:,.1f}万円）"
-        )
-        st.caption(
-            f"課税口座＋NISAの合計は{combined_investment_total:,.1f}万円です。"
-            "現金・iDeCoの残高と合わせて、必要であれば「現在の総金融資産」欄を"
-            "ご確認・更新してください（自動では上書きしません）。"
-            "下の入力欄は取り込み後も手動で調整できます。"
-        )
-
-        for warning in cached_import_result.warnings:
-            st.caption(f"⚠️ {warning}")
-
-        with st.expander("取り込んだファンドの内訳を見る"):
-            for holding in cached_import_result.holdings:
-                st.write(
-                    f"- {holding.fund_name}（{holding.account_type}）："
-                    f"評価額 {holding.valuation_amount:,.1f}万円 / "
-                    f"買付額 {holding.purchase_amount:,.1f}万円"
-                )
-
-        cached_balance_result = st.session_state.get("_asset_import_balance")
-        if cached_balance_result is not None and cached_balance_result.by_fund:
-            st.markdown("**保有ファンドのバランス評価**")
-
-            b1, b2 = st.columns(2)
-            with b1:
-                st.caption("カテゴリ別配分")
-                for slice_ in cached_balance_result.by_category:
-                    st.write(f"- {slice_.label}：{slice_.weight_pct:.1f}%")
-            with b2:
-                st.caption("口座種別の配分")
-                for slice_ in cached_balance_result.by_account_type:
-                    st.write(f"- {slice_.label}：{slice_.weight_pct:.1f}%")
-
-            for warning in cached_balance_result.concentration_warnings:
-                st.warning(warning)
-
-            cached_commentary = st.session_state.get("_asset_import_commentary")
-            if cached_commentary:
-                with st.expander("📋 保有ファンドのバランス総評を見る", expanded=True):
-                    st.markdown(cached_commentary)
-                    st.caption(
-                        "※配分の事実に基づく解説であり、売買を推奨するものでは"
-                        "ありません。最終判断はご自身で行ってください。"
-                    )
-
-st.subheader("1. FIRE基本情報")
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
-    current_age = st.number_input(
-        "現在年齢",
-        min_value=18,
-        max_value=100,
-        value=43,
-    )
-
-with c2:
-    end_age = st.number_input(
-        "シミュレーション終了年齢",
-        min_value=50,
-        max_value=120,
-        value=90,
-    )
-
-with c3:
-    current_assets = st.number_input(
-        "現在の総金融資産（万円）",
-        min_value=0.0,
-        value=4700.0,
-        step=50.0,
-    )
-
-c4, c5, c6 = st.columns(3)
-
-with c4:
-    cash_assets = st.number_input(
-        "現金・預金（万円）",
-        min_value=0.0,
-        value=800.0,
-        step=50.0,
-    )
-
-with c5:
-    annual_spending = st.number_input(
-        "年間生活費（万円）",
-        min_value=0.0,
-        value=200.0,
-        step=10.0,
-    )
-
-with c6:
-    annual_side_income = st.number_input(
-        "年間副収入（万円）",
-        min_value=0.0,
-        value=36.0,
-        step=5.0,
-    )
-
-st.subheader("2. シミュレーション条件")
-
-c7, c8, c9 = st.columns(3)
-
-with c7:
-    expected_return = st.number_input(
-        "想定運用利回り（%）",
-        min_value=-20.0,
-        max_value=20.0,
-        value=4.0,
-        step=0.5,
-    )
-
-with c8:
-    inflation = st.number_input(
-        "想定インフレ率（%）",
-        min_value=0.0,
-        max_value=10.0,
-        value=2.0,
-        step=0.5,
-    )
-
-with c9:
-    safety_margin = st.slider(
-        "安全余裕率（%）",
-        min_value=0,
-        max_value=40,
-        value=10,
-        step=5,
-    )
-
-st.subheader("3. 現金バッファ・市場環境")
-
-c10, c11 = st.columns(2)
-
-with c10:
-    min_cash_months = st.number_input(
-        "最低確保する現金（か月）",
-        min_value=0.0,
-        max_value=36.0,
-        value=12.0,
-        step=1.0,
-        help="通常時に最低限確保したい現金の月数です。",
-    )
-
-with c11:
-    auto_market_result = None
-    try:
-        auto_market_result = _cached_fetch_market_condition()
-    except MarketDataError:
-        auto_market_result = None
-
-    condition_options = ["通常", "弱気相場", "暴落", "深刻な暴落"]
-    default_index = (
-        condition_options.index(auto_market_result.condition)
-        if auto_market_result is not None
-        else 0
-    )
-
-    market_condition = st.selectbox(
-        "現在の市場環境",
-        condition_options,
-        index=default_index,
-        help=(
-            "S&P500の過去最高値からの下落率をもとに自動で初期値を提案します"
-            "（取得できない場合は「通常」を初期値とします）。"
-            "手動でいつでも変更できます。"
-        ),
-    )
-
-    if auto_market_result is not None:
-        st.caption(
-            f"自動判定：S&P500は過去最高値（{auto_market_result.all_time_high:,.0f}）から"
-            f"{auto_market_result.drawdown_pct * 100:.1f}%下落しており、"
-            f"「{auto_market_result.condition}」を提案しています"
-            "（手動で変更可能です）。"
-        )
-    else:
-        st.caption(
-            "市場データの自動取得に失敗したため、手動で選択してください。"
-        )
-
-st.subheader("3.5. 今月以降の大型支出予定")
-
-st.caption(
-    "旅行・車・医療などの不定期な大型支出を登録できます。"
-    "今月分の予定は、今月のFIRE判定・取り崩しプランに反映されます。"
-    "複数か月に分けて計上したい場合は「分散月数」を1より大きくしてください"
-    "（例: 90万円を3か月に分散すると毎月30万円ずつ計上されます）。"
-)
-
-with st.form("add_large_expense_form", clear_on_submit=True):
-    e1, e2, e3, e4, e5 = st.columns([2, 1, 1, 1, 1])
-
-    with e1:
-        expense_name = st.text_input("支出の名称", placeholder="例: 沖縄旅行")
-
-    with e2:
-        expense_category = st.selectbox("カテゴリ", LARGE_EXPENSE_CATEGORIES)
-
-    with e3:
-        expense_amount = st.number_input(
-            "金額（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=1.0,
-        )
-
-    with e4:
-        expense_month = st.text_input(
-            "予定月（YYYY-MM）",
-            value=date.today().strftime("%Y-%m"),
-            help="分散する場合は、この月が分散区間の開始月になります。",
-        )
-
-    with e5:
-        expense_distribution_months = st.number_input(
-            "分散月数",
-            min_value=1,
-            max_value=36,
-            value=1,
-            step=1,
-            help=(
-                "1のままだと従来通り予定月に全額計上します。"
-                "2以上にすると、予定月から連続する月に均等分散します"
-                "（端数はできるだけ均等に各月へ配分されます）。"
-            ),
-        )
-
-    expense_memo = st.text_input("メモ（任意）", placeholder="任意で入力")
-
-    if st.form_submit_button("➕ 大型支出予定を追加"):
-        try:
-            add_large_expense(
-                expense_name,
-                expense_category,
-                expense_amount,
-                expense_month,
-                memo=expense_memo,
-                distribution_months=int(expense_distribution_months),
-                path=LARGE_EXPENSE_PATH,
-            )
-        except ValueError as error:
-            st.warning(str(error))
-        else:
-            _safe_log_event(
-                "large_expense_added",
-                f"大型支出予定を追加しました（カテゴリ: {expense_category}）。",
+                "previous_inputs_reloaded",
+                "前回保存した入力値を読み込み直しました。",
             )
             st.rerun()
 
-large_expenses = load_large_expenses(path=LARGE_EXPENSE_PATH)
+with st.container(border=True):
+    mode_col, reset_col = st.columns([3, 1])
 
-if large_expenses:
-    st.caption(f"登録済みの大型支出予定：{len(large_expenses)}件")
-
-    for index, expense in enumerate(large_expenses):
-        expense_id = expense.get("id", "")
-
-        with st.container(border=True):
-            le1, le2 = st.columns([4, 1])
-
-            with le1:
-                distribution_months = int(expense.get("distribution_months", 1) or 1)
-
-                if distribution_months > 1:
-                    end_month = distribution_end_month(expense)
-                    monthly_amount = expense.get("amount", 0) / distribution_months
-                    st.write(
-                        f"**{expense.get('expected_month', '---')}〜{end_month}　"
-                        f"{expense.get('name', '')}"
-                        f"（{expense.get('category', '')}）：合計"
-                        f"{expense.get('amount', 0):,.1f}万円"
-                        f"（{distribution_months}か月に分散・月あたり約"
-                        f"{monthly_amount:,.1f}万円）**"
-                    )
-                else:
-                    st.write(
-                        f"**{expense.get('expected_month', '---')}　"
-                        f"{expense.get('name', '')}"
-                        f"（{expense.get('category', '')}）："
-                        f"{expense.get('amount', 0):,.1f}万円**"
-                    )
-
-                if expense.get("memo"):
-                    st.caption(expense["memo"])
-
-            with le2:
-                if st.button(
-                    "🗑️ 削除",
-                    key=f"delete_large_expense_{expense_id}_{index}",
-                    use_container_width=True,
-                ):
-                    delete_large_expense(expense_id, path=LARGE_EXPENSE_PATH)
-                    _safe_log_event(
-                        "large_expense_deleted",
-                        "大型支出予定を1件削除しました。",
-                    )
-                    st.rerun()
-else:
-    st.caption("登録済みの大型支出予定はありません。")
-
-st.subheader("3.6. 年金受給開始年齢（ステージ判定用）")
-
-st.caption(
-    "60歳〜受給開始前／受給開始〜74歳／75歳以降のステージを判定し、"
-    "今月の安全生活費の算出に反映します。詳細な年金額・NISA・iDeCoの"
-    "設定はシミュレーション実行後の「8. NISA・iDeCo・年金最適化」で行います。"
-)
-
-pension_start_age = st.number_input(
-    "年金受給開始年齢",
-    min_value=65,
-    max_value=75,
-    value=65,
-    step=1,
-)
-
-st.subheader("3.7. 社会保険料・住民税（国民健康保険・国民年金・住民税）")
-
-st.caption(
-    "FIRE後は給与天引きがなくなり、国民健康保険料・国民年金保険料・住民税を"
-    "自分で納付する必要があります。ここで算出した月額目安は、"
-    "「4. 今月のFIRE判定」の安全・推奨・上限生活費から直接差し引かれます。"
-    "国民健康保険料・住民税は自治体ごとに料率・軽減制度が異なるため、"
-    "ここでの金額は全国的な簡易モデルによる概算です。正確な金額は"
-    "居住自治体でご確認ください。"
-)
-
-si1, si2 = st.columns(2)
-
-with si1:
-    prior_year_income = st.number_input(
-        "前年の年間所得目安（万円）",
-        min_value=0.0,
-        value=0.0,
-        step=10.0,
-        help=(
-            "給与所得だけでなく、課税口座の譲渡益・配当など"
-            "国民健康保険料・住民税の算定に含まれる所得の合計を目安として"
-            "入力してください。FIRE直後の1〜2年は在職中の高い所得が"
-            "基準になる点にご注意ください。"
-        ),
-    )
-
-with si2:
-    household_size = st.number_input(
-        "世帯人数（国保加入者数）",
-        min_value=1,
-        max_value=10,
-        value=1,
-        step=1,
-        help=(
-            "国民健康保険料の均等割の算定に使用します"
-            "（住民税の均等割は個人単位の定額のため、この人数の影響を"
-            "受けません）。"
-        ),
-    )
-
-social_insurance_result = calculate_social_insurance(
-    prior_year_income=prior_year_income,
-    household_size=int(household_size),
-    current_age=current_age,
-)
-
-resident_tax_result = calculate_resident_tax(prior_year_income=prior_year_income)
-
-si_m1, si_m2, si_m3, si_m4 = st.columns(4)
-
-si_m1.metric(
-    "国民健康保険料（月額目安）",
-    f"{social_insurance_result.monthly_health_insurance:,.1f}万円",
-)
-
-si_m2.metric(
-    "国民年金保険料（月額目安）",
-    f"{social_insurance_result.monthly_national_pension:,.1f}万円",
-)
-
-si_m3.metric(
-    "住民税（月額目安）",
-    f"{resident_tax_result.monthly_total:,.1f}万円",
-)
-
-si_m4.metric(
-    "合計（月額目安）",
-    f"{social_insurance_result.monthly_total + resident_tax_result.monthly_total:,.1f}万円",
-)
-
-with st.expander("国民健康保険料・住民税の内訳を見る"):
-    for component in social_insurance_result.health_insurance_components:
-        capped_note = "（賦課限度額に到達）" if component.capped else ""
-        st.write(
-            f"- {component.label}：所得割 {component.income_levy:,.1f}万円 ＋ "
-            f"均等割 {component.per_capita_levy:,.1f}万円 ＝ "
-            f"{component.capped_amount:,.1f}万円{capped_note}"
+    with mode_col:
+        st.toggle(
+            "🗂️ 簡易モード（今月の判定・推奨行動・実績記録だけを表示）",
+            key="simple_mode",
+            on_change=_persist_checklist_state,
+            help=(
+                "オフにすると、入力欄や詳細な分析セクションも含めて"
+                "すべて常時表示する詳細モードになります。"
+            ),
         )
-    st.write(
-        f"- 住民税：所得割 {resident_tax_result.income_levy:,.1f}万円 ＋ "
-        f"均等割 {resident_tax_result.per_capita_levy:,.1f}万円 ＝ "
-        f"{resident_tax_result.annual_total:,.1f}万円/年"
+
+    with reset_col:
+        if st.button(
+            "↺ チェックをリセット",
+            use_container_width=True,
+        ):
+            reset_checklist_items(path=CHECKLIST_PATH)
+            for _reset_item_id, _ in CHECKLIST_ITEMS:
+                st.session_state[f"checklist_{_reset_item_id}"] = False
+            _safe_log_event(
+                "checklist_reset",
+                "月次チェックリストをリセットしました。",
+            )
+            st.rerun()
+
+    st.caption("今月の確認事項（チェック状態は次回起動時も保持されます）:")
+    for _display_item_id, _display_label in CHECKLIST_ITEMS:
+        st.checkbox(
+            _display_label,
+            key=f"checklist_{_display_item_id}",
+            on_change=_persist_checklist_state,
+        )
+
+simple_mode = st.session_state.get("simple_mode", True)
+
+with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded=not simple_mode):
+    st.subheader("0. 保有資産の取り込み（証券会社CSV）")
+    st.caption(
+        "SBI証券の「保有ファンド一覧」CSVをアップロードすると、下の"
+        "「課税口座残高」「NISA現在残高」「NISA累計投資額・簿価」"
+        "「うち成長投資枠の累計投資額」の初期値に反映します。"
+        "現金・iDeCoの残高、今年のNISA投資額はCSVに含まれないため、"
+        "引き続き手入力してください。"
     )
-    for note in social_insurance_result.notes:
-        st.caption(f"※ {note}")
-    for note in resident_tax_result.notes:
-        st.caption(f"※ {note}")
+
+    uploaded_asset_csv = st.file_uploader(
+        "保有ファンド一覧CSV（SBI証券）",
+        type="csv",
+        key="asset_import_csv",
+    )
+
+    if uploaded_asset_csv is not None:
+        if uploaded_asset_csv.file_id != st.session_state.get(
+            "_asset_import_processed_id"
+        ):
+            try:
+                csv_text = decode_csv_bytes(uploaded_asset_csv.getvalue())
+                import_result = parse_sbi_fund_holdings_csv(csv_text)
+            except AssetImportError as error:
+                st.error(f"CSVの取り込みに失敗しました: {error}")
+                st.session_state.pop("_asset_import_processed_id", None)
+                st.session_state.pop("_asset_import_result", None)
+            else:
+                st.session_state["taxable_assets"] = import_result.taxable_assets
+                st.session_state["nisa_assets"] = import_result.nisa_assets
+                st.session_state["nisa_contributed"] = import_result.nisa_contributed
+                st.session_state["nisa_growth_contributed"] = (
+                    import_result.nisa_growth_contributed
+                )
+                st.session_state["_asset_import_processed_id"] = (
+                    uploaded_asset_csv.file_id
+                )
+                st.session_state["_asset_import_result"] = import_result
+
+                balance_result = analyze_portfolio_balance(import_result.holdings)
+                st.session_state["_asset_import_balance"] = balance_result
+                with st.spinner("保有ファンドのバランスを評価しています..."):
+                    st.session_state["_asset_import_commentary"] = (
+                        generate_portfolio_commentary(balance_result)
+                    )
+
+                _safe_log_event(
+                    "asset_csv_imported",
+                    f"保有ファンドCSVを取り込みました（{len(import_result.holdings)}件）。",
+                )
+
+        cached_import_result = st.session_state.get("_asset_import_result")
+        if cached_import_result is not None:
+            combined_investment_total = round(
+                cached_import_result.taxable_assets + cached_import_result.nisa_assets, 2
+            )
+            st.success(
+                f"{len(cached_import_result.holdings)}件の保有ファンドを取り込み済みです。"
+                f"課税口座残高: {cached_import_result.taxable_assets:,.1f}万円 / "
+                f"NISA残高: {cached_import_result.nisa_assets:,.1f}万円 / "
+                f"NISA累計投資額: {cached_import_result.nisa_contributed:,.1f}万円"
+                f"（うち成長投資枠: {cached_import_result.nisa_growth_contributed:,.1f}万円）"
+            )
+            st.caption(
+                f"課税口座＋NISAの合計は{combined_investment_total:,.1f}万円です。"
+                "現金・iDeCoの残高と合わせて、必要であれば「現在の総金融資産」欄を"
+                "ご確認・更新してください（自動では上書きしません）。"
+                "下の入力欄は取り込み後も手動で調整できます。"
+            )
+
+            for warning in cached_import_result.warnings:
+                st.caption(f"⚠️ {warning}")
+
+            with st.expander("取り込んだファンドの内訳を見る"):
+                for holding in cached_import_result.holdings:
+                    st.write(
+                        f"- {holding.fund_name}（{holding.account_type}）："
+                        f"評価額 {holding.valuation_amount:,.1f}万円 / "
+                        f"買付額 {holding.purchase_amount:,.1f}万円"
+                    )
+
+            cached_balance_result = st.session_state.get("_asset_import_balance")
+            if cached_balance_result is not None and cached_balance_result.by_fund:
+                st.markdown("**保有ファンドのバランス評価**")
+
+                b1, b2 = st.columns(2)
+                with b1:
+                    st.caption("カテゴリ別配分")
+                    for slice_ in cached_balance_result.by_category:
+                        st.write(f"- {slice_.label}：{slice_.weight_pct:.1f}%")
+                with b2:
+                    st.caption("口座種別の配分")
+                    for slice_ in cached_balance_result.by_account_type:
+                        st.write(f"- {slice_.label}：{slice_.weight_pct:.1f}%")
+
+                for warning in cached_balance_result.concentration_warnings:
+                    st.warning(warning)
+
+                cached_commentary = st.session_state.get("_asset_import_commentary")
+                if cached_commentary:
+                    with st.expander("📋 保有ファンドのバランス総評を見る", expanded=True):
+                        st.markdown(cached_commentary)
+                        st.caption(
+                            "※配分の事実に基づく解説であり、売買を推奨するものでは"
+                            "ありません。最終判断はご自身で行ってください。"
+                        )
+
+    st.subheader("1. FIRE基本情報")
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        current_age = st.number_input(
+            "現在年齢",
+            min_value=18,
+            max_value=100,
+            key="current_age",
+        )
+
+    with c2:
+        end_age = st.number_input(
+            "シミュレーション終了年齢",
+            min_value=50,
+            max_value=120,
+            key="end_age",
+        )
+
+    with c3:
+        current_assets = st.number_input(
+            "現在の総金融資産（万円）",
+            min_value=0.0,
+            step=50.0,
+            key="current_assets",
+        )
+
+    c4, c5, c6 = st.columns(3)
+
+    with c4:
+        cash_assets = st.number_input(
+            "現金・預金（万円）",
+            min_value=0.0,
+            step=50.0,
+            key="cash_assets",
+        )
+
+    with c5:
+        annual_spending = st.number_input(
+            "年間生活費（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="annual_spending",
+        )
+
+    with c6:
+        annual_side_income = st.number_input(
+            "年間副収入（万円）",
+            min_value=0.0,
+            step=5.0,
+            key="annual_side_income",
+        )
+
+    st.subheader("2. シミュレーション条件")
+
+    c7, c8, c9 = st.columns(3)
+
+    with c7:
+        expected_return = st.number_input(
+            "想定運用利回り（%）",
+            min_value=-20.0,
+            max_value=20.0,
+            step=0.5,
+            key="expected_return",
+        )
+
+    with c8:
+        inflation = st.number_input(
+            "想定インフレ率（%）",
+            min_value=0.0,
+            max_value=10.0,
+            step=0.5,
+            key="inflation",
+        )
+
+    with c9:
+        safety_margin = st.slider(
+            "安全余裕率（%）",
+            min_value=0,
+            max_value=40,
+            step=5,
+            key="safety_margin",
+        )
+
+    st.subheader("3. 現金バッファ・市場環境")
+
+    c10, c11 = st.columns(2)
+
+    with c10:
+        min_cash_months = st.number_input(
+            "最低確保する現金（か月）",
+            min_value=0.0,
+            max_value=36.0,
+            step=1.0,
+            help="通常時に最低限確保したい現金の月数です。",
+            key="min_cash_months",
+        )
+
+    with c11:
+        auto_market_result = None
+        try:
+            auto_market_result = _cached_fetch_market_condition()
+        except MarketDataError:
+            auto_market_result = None
+
+        condition_options = ["通常", "弱気相場", "暴落", "深刻な暴落"]
+        default_index = (
+            condition_options.index(auto_market_result.condition)
+            if auto_market_result is not None
+            else 0
+        )
+
+        market_condition = st.selectbox(
+            "現在の市場環境",
+            condition_options,
+            index=default_index,
+            help=(
+                "S&P500の過去最高値からの下落率をもとに自動で初期値を提案します"
+                "（取得できない場合は「通常」を初期値とします）。"
+                "手動でいつでも変更できます。"
+            ),
+        )
+
+        if auto_market_result is not None:
+            st.caption(
+                f"自動判定：S&P500は過去最高値（{auto_market_result.all_time_high:,.0f}）から"
+                f"{auto_market_result.drawdown_pct * 100:.1f}%下落しており、"
+                f"「{auto_market_result.condition}」を提案しています"
+                "（手動で変更可能です）。"
+            )
+        else:
+            st.caption(
+                "市場データの自動取得に失敗したため、手動で選択してください。"
+            )
+
+    st.subheader("3.5. 今月以降の大型支出予定")
+
+    st.caption(
+        "旅行・車・医療などの不定期な大型支出を登録できます。"
+        "今月分の予定は、今月のFIRE判定・取り崩しプランに反映されます。"
+        "複数か月に分けて計上したい場合は「分散月数」を1より大きくしてください"
+        "（例: 90万円を3か月に分散すると毎月30万円ずつ計上されます）。"
+    )
+
+    with st.form("add_large_expense_form", clear_on_submit=True):
+        e1, e2, e3, e4, e5 = st.columns([2, 1, 1, 1, 1])
+
+        with e1:
+            expense_name = st.text_input("支出の名称", placeholder="例: 沖縄旅行")
+
+        with e2:
+            expense_category = st.selectbox("カテゴリ", LARGE_EXPENSE_CATEGORIES)
+
+        with e3:
+            expense_amount = st.number_input(
+                "金額（万円）",
+                min_value=0.0,
+                value=0.0,
+                step=1.0,
+            )
+
+        with e4:
+            expense_month = st.text_input(
+                "予定月（YYYY-MM）",
+                value=date.today().strftime("%Y-%m"),
+                help="分散する場合は、この月が分散区間の開始月になります。",
+            )
+
+        with e5:
+            expense_distribution_months = st.number_input(
+                "分散月数",
+                min_value=1,
+                max_value=36,
+                value=1,
+                step=1,
+                help=(
+                    "1のままだと従来通り予定月に全額計上します。"
+                    "2以上にすると、予定月から連続する月に均等分散します"
+                    "（端数はできるだけ均等に各月へ配分されます）。"
+                ),
+            )
+
+        expense_memo = st.text_input("メモ（任意）", placeholder="任意で入力")
+
+        if st.form_submit_button("➕ 大型支出予定を追加"):
+            try:
+                add_large_expense(
+                    expense_name,
+                    expense_category,
+                    expense_amount,
+                    expense_month,
+                    memo=expense_memo,
+                    distribution_months=int(expense_distribution_months),
+                    path=LARGE_EXPENSE_PATH,
+                )
+            except ValueError as error:
+                st.warning(str(error))
+            else:
+                _safe_log_event(
+                    "large_expense_added",
+                    f"大型支出予定を追加しました（カテゴリ: {expense_category}）。",
+                )
+                st.rerun()
+
+    large_expenses = load_large_expenses(path=LARGE_EXPENSE_PATH)
+
+    if large_expenses:
+        st.caption(f"登録済みの大型支出予定：{len(large_expenses)}件")
+
+        for index, expense in enumerate(large_expenses):
+            expense_id = expense.get("id", "")
+
+            with st.container(border=True):
+                le1, le2 = st.columns([4, 1])
+
+                with le1:
+                    distribution_months = int(expense.get("distribution_months", 1) or 1)
+
+                    if distribution_months > 1:
+                        end_month = distribution_end_month(expense)
+                        monthly_amount = expense.get("amount", 0) / distribution_months
+                        st.write(
+                            f"**{expense.get('expected_month', '---')}〜{end_month}　"
+                            f"{expense.get('name', '')}"
+                            f"（{expense.get('category', '')}）：合計"
+                            f"{expense.get('amount', 0):,.1f}万円"
+                            f"（{distribution_months}か月に分散・月あたり約"
+                            f"{monthly_amount:,.1f}万円）**"
+                        )
+                    else:
+                        st.write(
+                            f"**{expense.get('expected_month', '---')}　"
+                            f"{expense.get('name', '')}"
+                            f"（{expense.get('category', '')}）："
+                            f"{expense.get('amount', 0):,.1f}万円**"
+                        )
+
+                    if expense.get("memo"):
+                        st.caption(expense["memo"])
+
+                with le2:
+                    if st.button(
+                        "🗑️ 削除",
+                        key=f"delete_large_expense_{expense_id}_{index}",
+                        use_container_width=True,
+                    ):
+                        delete_large_expense(expense_id, path=LARGE_EXPENSE_PATH)
+                        _safe_log_event(
+                            "large_expense_deleted",
+                            "大型支出予定を1件削除しました。",
+                        )
+                        st.rerun()
+    else:
+        st.caption("登録済みの大型支出予定はありません。")
+
+    st.subheader("3.6. 年金受給開始年齢（ステージ判定用）")
+
+    st.caption(
+        "60歳〜受給開始前／受給開始〜74歳／75歳以降のステージを判定し、"
+        "今月の安全生活費の算出に反映します。詳細な年金額・NISA・iDeCoの"
+        "設定はシミュレーション実行後の「8. NISA・iDeCo・年金最適化」で行います。"
+    )
+
+    pension_start_age = st.number_input(
+        "年金受給開始年齢",
+        min_value=65,
+        max_value=75,
+        step=1,
+        key="pension_start_age",
+    )
+
+    st.subheader("3.7. 社会保険料・住民税（国民健康保険・国民年金・住民税）")
+
+    st.caption(
+        "FIRE後は給与天引きがなくなり、国民健康保険料・国民年金保険料・住民税を"
+        "自分で納付する必要があります。ここで算出した月額目安は、"
+        "「4. 今月のFIRE判定」の安全・推奨・上限生活費から直接差し引かれます。"
+        "国民健康保険料・住民税は自治体ごとに料率・軽減制度が異なるため、"
+        "ここでの金額は全国的な簡易モデルによる概算です。正確な金額は"
+        "居住自治体でご確認ください。"
+    )
+
+    si1, si2 = st.columns(2)
+
+    with si1:
+        prior_year_income = st.number_input(
+            "前年の年間所得目安（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="prior_year_income",
+            help=(
+                "給与所得だけでなく、課税口座の譲渡益・配当など"
+                "国民健康保険料・住民税の算定に含まれる所得の合計を目安として"
+                "入力してください。FIRE直後の1〜2年は在職中の高い所得が"
+                "基準になる点にご注意ください。"
+            ),
+        )
+
+    with si2:
+        household_size = st.number_input(
+            "世帯人数（国保加入者数）",
+            min_value=1,
+            max_value=10,
+            step=1,
+            key="household_size",
+            help=(
+                "国民健康保険料の均等割の算定に使用します"
+                "（住民税の均等割は個人単位の定額のため、この人数の影響を"
+                "受けません）。"
+            ),
+        )
+
+    social_insurance_result = calculate_social_insurance(
+        prior_year_income=prior_year_income,
+        household_size=int(household_size),
+        current_age=current_age,
+    )
+
+    resident_tax_result = calculate_resident_tax(prior_year_income=prior_year_income)
+
+    si_m1, si_m2, si_m3, si_m4 = st.columns(4)
+
+    si_m1.metric(
+        "国民健康保険料（月額目安）",
+        f"{social_insurance_result.monthly_health_insurance:,.1f}万円",
+    )
+
+    si_m2.metric(
+        "国民年金保険料（月額目安）",
+        f"{social_insurance_result.monthly_national_pension:,.1f}万円",
+    )
+
+    si_m3.metric(
+        "住民税（月額目安）",
+        f"{resident_tax_result.monthly_total:,.1f}万円",
+    )
+
+    si_m4.metric(
+        "合計（全国一律モデルの概算）",
+        f"{social_insurance_result.monthly_total + resident_tax_result.monthly_total:,.1f}万円",
+    )
+
+    st.caption(
+        "※ 国民健康保険料・国民年金保険料・住民税は、いずれもお住まいの"
+        "自治体や所得状況によって実際の金額が変わる全国一律の簡易モデルに"
+        "よる概算です。上の「合計」も概算3つを足し合わせた目安であり、"
+        "実際の負担額とは異なる場合があります。"
+    )
+
+    with st.expander("国民健康保険料・住民税の内訳を見る"):
+        for component in social_insurance_result.health_insurance_components:
+            capped_note = "（賦課限度額に到達）" if component.capped else ""
+            st.write(
+                f"- {component.label}：所得割 {component.income_levy:,.1f}万円 ＋ "
+                f"均等割 {component.per_capita_levy:,.1f}万円 ＝ "
+                f"{component.capped_amount:,.1f}万円{capped_note}"
+            )
+        st.write(
+            f"- 住民税：所得割 {resident_tax_result.income_levy:,.1f}万円 ＋ "
+            f"均等割 {resident_tax_result.per_capita_levy:,.1f}万円 ＝ "
+            f"{resident_tax_result.annual_total:,.1f}万円/年"
+        )
+        for note in social_insurance_result.notes:
+            st.caption(f"※ {note}")
+        for note in resident_tax_result.notes:
+            st.caption(f"※ {note}")
+
+    st.subheader("3.8. 資産内訳（NISA・iDeCo・課税口座）")
+    st.caption(
+        "「0. 保有資産の取り込み」でCSVをアップロードした場合、この欄に"
+        "取り込んだ課税口座残高・NISA残高が反映されます。内容は自由に調整できます。"
+    )
+
+    t1, t2, t3 = st.columns(3)
+
+    with t1:
+        nisa_assets = st.number_input(
+            "NISA現在残高（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="nisa_assets",
+        )
+        nisa_contributed = st.number_input(
+            "NISA累計投資額・簿価（万円）",
+            min_value=0.0,
+            step=10.0,
+            help="NISAの非課税保有限度額は取得価額（簿価）ベースです。",
+            key="nisa_contributed",
+        )
+        nisa_growth_contributed = st.number_input(
+            "うち成長投資枠の累計投資額（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="nisa_growth_contributed",
+        )
+        nisa_annual_contributed = st.number_input(
+            "今年のNISA投資額（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="nisa_annual_contributed",
+        )
+
+    with t2:
+        taxable_assets = st.number_input(
+            "課税口座残高（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="taxable_assets",
+        )
+        taxable_gain_ratio_pct = st.slider(
+            "課税口座の含み益割合（%）",
+            min_value=0,
+            max_value=100,
+            step=5,
+            key="taxable_gain_ratio_pct",
+            help=(
+                "課税口座残高のうち含み益（購入時より値上がりした部分）の"
+                "割合の目安です。今月の取り崩しプランで、課税口座から売却"
+                "する場合の税金の目安計算に使用します。"
+            ),
+        )
+        ideco_assets = st.number_input(
+            "iDeCo現在残高（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="ideco_assets",
+        )
+        ideco_monthly_contribution = st.number_input(
+            "iDeCo月額掛金（万円）",
+            min_value=0.0,
+            step=0.1,
+            key="ideco_monthly_contribution",
+        )
+        ideco_annual_limit = st.number_input(
+            "iDeCo年間上限（万円）",
+            min_value=0.0,
+            step=1.0,
+            help="2026年12月1日施行予定の制度改正後の第2号加入者の共通拠出限度額を年額換算した参考値です。実際の上限は加入区分等で異なります。",
+            key="ideco_annual_limit",
+        )
+
+    with t3:
+        annual_pension = st.number_input(
+            "65歳時点の年金見込額（万円/年）",
+            min_value=0.0,
+            step=10.0,
+            key="annual_pension",
+        )
+        st.caption(
+            f"年金受給開始年齢: **{pension_start_age}歳**"
+            "（「3.6. 年金受給開始年齢」で設定した値を使用します）"
+        )
 
 run = st.button(
     "🧭 FIREシミュレーションを実行",
@@ -666,10 +936,15 @@ if run:
 
     status_display(f"**{status_label}**")
 
+    _estimate_deducted = (
+        "social_insurance_deducted" in monthly_budget.reasons
+        or "resident_tax_deducted" in monthly_budget.reasons
+    )
+
     b1, b2, b3 = st.columns(3)
 
     b1.metric(
-        "安全生活費",
+        "安全生活費" + ("（概算込み）" if _estimate_deducted else ""),
         f"{monthly_budget.safe_monthly:,.1f}万円",
     )
 
@@ -697,18 +972,19 @@ if run:
             "調整を行っています。詳しくは下の「判定の根拠」をご覧ください。"
         )
 
-    if "social_insurance_deducted" in monthly_budget.reasons:
-        st.caption(
-            f"国民健康保険料・国民年金保険料の月額目安"
-            f"（{social_insurance_result.monthly_total:,.1f}万円）を"
-            "安全・推奨・上限生活費から差し引いています。"
-        )
+    if _estimate_deducted:
+        _deducted_estimate_total = 0.0
+        if "social_insurance_deducted" in monthly_budget.reasons:
+            _deducted_estimate_total += social_insurance_result.monthly_total
+        if "resident_tax_deducted" in monthly_budget.reasons:
+            _deducted_estimate_total += resident_tax_result.monthly_total
 
-    if "resident_tax_deducted" in monthly_budget.reasons:
-        st.caption(
-            f"住民税の月額目安"
-            f"（{resident_tax_result.monthly_total:,.1f}万円）を"
-            "安全・推奨・上限生活費から差し引いています。"
+        st.info(
+            "🧮 安全・推奨・上限生活費には、国民健康保険料・国民年金保険料・"
+            f"住民税の月額目安（合計 約{_deducted_estimate_total:,.1f}万円）"
+            "を差し引いています。いずれも全国一律の簡易モデルによる概算で、"
+            "実際の金額はお住まいの自治体・所得状況により異なります。"
+            "内訳は「3.7. 社会保険料・住民税」でご確認いただけます。"
         )
 
     budget_explanation = build_budget_explanation(
@@ -717,8 +993,10 @@ if run:
 
     with st.expander("📋 この判定の根拠を見る"):
         st.write(f"**{budget_explanation.binding_summary}**")
-        for detail in budget_explanation.details:
-            st.write(f"- {detail}")
+        for group in budget_explanation.groups:
+            st.markdown(f"**{group.category_label}**")
+            for detail in group.details:
+                st.write(f"- {detail}")
 
         if sequence_risk_result.life_stage_applicable and (
             "sequence_risk_evaluated" in monthly_budget.reasons
@@ -827,365 +1105,285 @@ if run:
         "実際に今月使ってよい金額は「4. 今月のFIRE判定」を優先してください。"
     )
 
-    st.subheader("6. 市場環境別の防御ルール")
+    with st.expander("🔍 詳細分析を見る（6〜12）", expanded=not simple_mode):
+        st.subheader("6. 市場環境別の防御ルール")
 
-    rule_cols = st.columns(4)
+        rule_cols = st.columns(4)
 
-    for col, condition in zip(
-        rule_cols,
-        ["通常", "弱気相場", "暴落", "深刻な暴落"],
-    ):
-        condition_strategy = calculate_crash_strategy(
-            base_monthly_spending=result.net_annual_spending / 12.0,
-            min_cash_months=min_cash_months,
-            condition=condition,
-        )
-
-        with col:
-            st.markdown(f"### {condition}")
-            st.write(
-                f"現金：**{condition_strategy.target_cash_months:.0f}か月**"
-            )
-            st.write(
-                f"追加投資：**"
-                f"{condition_strategy.additional_investment_ratio * 100:.0f}%**"
-            )
-            st.write(
-                f"生活費削減：**"
-                f"{condition_strategy.spending_reduction_pct:.0f}%**"
+        for col, condition in zip(
+            rule_cols,
+            ["通常", "弱気相場", "暴落", "深刻な暴落"],
+        ):
+            condition_strategy = calculate_crash_strategy(
+                base_monthly_spending=result.net_annual_spending / 12.0,
+                min_cash_months=min_cash_months,
+                condition=condition,
             )
 
-    st.subheader("7. AI FIREアドバイス")
+            with col:
+                st.markdown(f"### {condition}")
+                st.write(
+                    f"現金：**{condition_strategy.target_cash_months:.0f}か月**"
+                )
+                st.write(
+                    f"追加投資：**"
+                    f"{condition_strategy.additional_investment_ratio * 100:.0f}%**"
+                )
+                st.write(
+                    f"生活費削減：**"
+                    f"{condition_strategy.spending_reduction_pct:.0f}%**"
+                )
 
-    ai_advice = generate_ai_advice(
-        fire_result=result,
-        market_condition=market_condition,
-        strategy=strategy,
-        recommended_action=recommended_action,
-        additional_investment=additional_investment,
-        investment_withdrawal=investment_withdrawal,
-    )
+        st.subheader("7. AI FIREアドバイス")
 
-    st.markdown(ai_advice)
-    st.subheader("8. NISA・iDeCo・年金最適化")
-
-    t1, t2, t3 = st.columns(3)
-
-    with t1:
-        nisa_assets = st.number_input(
-            "NISA現在残高（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
-            key="nisa_assets",
-        )
-        nisa_contributed = st.number_input(
-            "NISA累計投資額・簿価（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
-            help="NISAの非課税保有限度額は取得価額（簿価）ベースです。",
-            key="nisa_contributed",
-        )
-        nisa_growth_contributed = st.number_input(
-            "うち成長投資枠の累計投資額（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
-            key="nisa_growth_contributed",
-        )
-        nisa_annual_contributed = st.number_input(
-            "今年のNISA投資額（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
+        ai_advice = generate_ai_advice(
+            fire_result=result,
+            market_condition=market_condition,
+            strategy=strategy,
+            recommended_action=recommended_action,
+            additional_investment=additional_investment,
+            investment_withdrawal=investment_withdrawal,
         )
 
-    with t2:
-        taxable_assets = st.number_input(
-            "課税口座残高（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
-            key="taxable_assets",
-        )
-        taxable_gain_ratio_pct = st.slider(
-            "課税口座の含み益割合（%）",
-            min_value=0,
-            max_value=100,
-            value=30,
-            step=5,
-            help=(
-                "課税口座残高のうち含み益（購入時より値上がりした部分）の"
-                "割合の目安です。今月の取り崩しプランで、課税口座から売却"
-                "する場合の税金の目安計算に使用します。"
-            ),
-        )
-        ideco_assets = st.number_input(
-            "iDeCo現在残高（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
-        )
-        ideco_monthly_contribution = st.number_input(
-            "iDeCo月額掛金（万円）",
-            min_value=0.0,
-            value=0.0,
-            step=0.1,
-        )
-        ideco_annual_limit = st.number_input(
-            "iDeCo年間上限（万円）",
-            min_value=0.0,
-            value=74.4,
-            step=1.0,
-            help="2026年12月1日施行予定の制度改正後の第2号加入者の共通拠出限度額を年額換算した参考値です。実際の上限は加入区分等で異なります。",
+        st.markdown(ai_advice)
+        st.subheader("8. NISA・iDeCo・年金最適化")
+
+        tax_result = run_tax_optimization(
+            TaxOptimizationInput(
+                nisa_assets=nisa_assets,
+                nisa_contributed=nisa_contributed,
+                nisa_growth_contributed=nisa_growth_contributed,
+                nisa_annual_contributed=nisa_annual_contributed,
+                taxable_assets=taxable_assets,
+                ideco_assets=ideco_assets,
+                ideco_monthly_contribution=ideco_monthly_contribution,
+                ideco_annual_limit=ideco_annual_limit,
+                current_age=current_age,
+                pension_start_age=pension_start_age,
+                annual_pension=annual_pension,
+                annual_spending=annual_spending,
+                end_age=end_age,
+            )
         )
 
-    with t3:
-        annual_pension = st.number_input(
-            "65歳時点の年金見込額（万円/年）",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
+        tax_cols = st.columns(5)
+        tax_cols[0].metric(
+            "NISA残り総枠",
+            f"{tax_result.nisa_remaining_limit:,.0f}万円",
         )
+        tax_cols[1].metric(
+            "NISA成長枠残り",
+            f"{tax_result.nisa_growth_remaining_limit:,.0f}万円",
+        )
+        tax_cols[2].metric(
+            "今年のNISA残り",
+            f"{tax_result.nisa_annual_room:,.0f}万円",
+        )
+        tax_cols[3].metric(
+            "iDeCo年額拠出",
+            f"{tax_result.ideco_annual_contribution:,.1f}万円",
+        )
+        tax_cols[4].metric(
+            "年金開始後の年間不足",
+            f"{tax_result.pension_gap_after_start:,.0f}万円",
+        )
+
+        st.info(tax_result.recommendation)
         st.caption(
-            f"年金受給開始年齢: **{pension_start_age}歳**"
-            "（「3.6. 年金受給開始年齢」で設定した値を使用します）"
+            "NISAは年間360万円・生涯1,800万円（成長投資枠は1,200万円が内数）を基準に計算します。"
+            "年金は65〜75歳の受給開始年齢を入力し、開始後の生活費不足額を表示します。"
         )
 
-    tax_result = run_tax_optimization(
-        TaxOptimizationInput(
-            nisa_assets=nisa_assets,
-            nisa_contributed=nisa_contributed,
-            nisa_growth_contributed=nisa_growth_contributed,
-            nisa_annual_contributed=nisa_annual_contributed,
+        st.subheader("9. 今月の取り崩しプラン")
+
+        withdrawal_amount_needed = round(
+            monthly_budget.safe_monthly + this_month_large_expense_total, 2
+        )
+
+        withdrawal_plan = calculate_withdrawal_plan(
+            amount_needed=withdrawal_amount_needed,
+            cash_assets=cash_assets,
+            cash_buffer_target=target_cash,
             taxable_assets=taxable_assets,
+            nisa_assets=nisa_assets,
             ideco_assets=ideco_assets,
-            ideco_monthly_contribution=ideco_monthly_contribution,
-            ideco_annual_limit=ideco_annual_limit,
             current_age=current_age,
-            pension_start_age=pension_start_age,
-            annual_pension=annual_pension,
-            annual_spending=annual_spending,
-            end_age=end_age,
-        )
-    )
-
-    tax_cols = st.columns(5)
-    tax_cols[0].metric(
-        "NISA残り総枠",
-        f"{tax_result.nisa_remaining_limit:,.0f}万円",
-    )
-    tax_cols[1].metric(
-        "NISA成長枠残り",
-        f"{tax_result.nisa_growth_remaining_limit:,.0f}万円",
-    )
-    tax_cols[2].metric(
-        "今年のNISA残り",
-        f"{tax_result.nisa_annual_room:,.0f}万円",
-    )
-    tax_cols[3].metric(
-        "iDeCo年額拠出",
-        f"{tax_result.ideco_annual_contribution:,.1f}万円",
-    )
-    tax_cols[4].metric(
-        "年金開始後の年間不足",
-        f"{tax_result.pension_gap_after_start:,.0f}万円",
-    )
-
-    st.info(tax_result.recommendation)
-    st.caption(
-        "NISAは年間360万円・生涯1,800万円（成長投資枠は1,200万円が内数）を基準に計算します。"
-        "年金は65〜75歳の受給開始年齢を入力し、開始後の生活費不足額を表示します。"
-    )
-
-    st.subheader("9. 今月の取り崩しプラン")
-
-    withdrawal_amount_needed = round(
-        monthly_budget.safe_monthly + this_month_large_expense_total, 2
-    )
-
-    withdrawal_plan = calculate_withdrawal_plan(
-        amount_needed=withdrawal_amount_needed,
-        cash_assets=cash_assets,
-        cash_buffer_target=target_cash,
-        taxable_assets=taxable_assets,
-        nisa_assets=nisa_assets,
-        ideco_assets=ideco_assets,
-        current_age=current_age,
-        ideco_access_age=tax_result.ideco_access_age,
-        pension_start_age=tax_result.pension_start_age,
-        pension_monthly_income=tax_result.pension_monthly_income,
-        taxable_gain_ratio=taxable_gain_ratio_pct / 100.0,
-    )
-
-    if this_month_large_expense_total > 0.005:
-        st.caption(
-            f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円に、"
-            f"今月予定の大型支出 {this_month_large_expense_total:,.1f}万円を加えた"
-            f"合計 {withdrawal_amount_needed:,.1f}万円を、どこから充当するかの候補です。"
-        )
-    else:
-        st.caption(
-            f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円を、"
-            "どこから充当するかの候補です。"
+            ideco_access_age=tax_result.ideco_access_age,
+            pension_start_age=tax_result.pension_start_age,
+            pension_monthly_income=tax_result.pension_monthly_income,
+            taxable_gain_ratio=taxable_gain_ratio_pct / 100.0,
         )
 
-    for step in withdrawal_plan.steps:
-        if step.amount > 0:
-            st.write(f"**{step.source}：{step.amount:,.1f}万円** — {step.reason}")
+        if this_month_large_expense_total > 0.005:
+            st.caption(
+                f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円に、"
+                f"今月予定の大型支出 {this_month_large_expense_total:,.1f}万円を加えた"
+                f"合計 {withdrawal_amount_needed:,.1f}万円を、どこから充当するかの候補です。"
+            )
         else:
-            st.caption(f"{step.source} — {step.reason}")
+            st.caption(
+                f"今月の安全生活費 {monthly_budget.safe_monthly:,.1f}万円を、"
+                "どこから充当するかの候補です。"
+            )
 
-    if withdrawal_plan.total_estimated_tax > 0.005:
+        for step in withdrawal_plan.steps:
+            if step.amount > 0:
+                st.write(f"**{step.source}：{step.amount:,.1f}万円** — {step.reason}")
+            else:
+                st.caption(f"{step.source} — {step.reason}")
+
+        if withdrawal_plan.total_estimated_tax > 0.005:
+            st.caption(
+                f"今回のプランに含まれる課税口座の取り崩しにかかる税金の目安は"
+                f"合計{withdrawal_plan.total_estimated_tax:,.1f}万円です"
+                "（簡易的な目安であり、実際の税額とは異なる場合があります）。"
+            )
+
+        if withdrawal_plan.dipped_into_cash_buffer:
+            st.warning(
+                "最低現金バッファを一時的に下回る取り崩し案です。"
+                "早めにバッファの補充を検討してください。"
+            )
+
+        if withdrawal_plan.shortfall_uncovered > 0.005:
+            st.error(
+                f"現金・課税口座・NISA・iDeCo・年金では"
+                f"{withdrawal_plan.shortfall_uncovered:,.1f}万円が不足しています。"
+                "生活費の見直しが必要な水準です。"
+            )
+
+        _safe_log_event(
+            "simulation_executed",
+            f"FIREシミュレーションを実行しました（市場環境: {market_condition}）。",
+        )
+
+        st.session_state["latest_simulation"] = {
+            "name": "FIREシミュレーション",
+            "inputs": {
+                "current_age": current_age,
+                "end_age": end_age,
+                "current_assets": current_assets,
+                "cash_assets": cash_assets,
+                "annual_spending": annual_spending,
+                "annual_side_income": annual_side_income,
+                "expected_return": expected_return,
+                "inflation": inflation,
+                "safety_margin": safety_margin,
+                "min_cash_months": min_cash_months,
+                "market_condition": market_condition,
+                "nisa_assets": nisa_assets,
+                "nisa_contributed": nisa_contributed,
+                "nisa_growth_contributed": nisa_growth_contributed,
+                "nisa_annual_contributed": nisa_annual_contributed,
+                "taxable_assets": taxable_assets,
+                "ideco_assets": ideco_assets,
+                "ideco_monthly_contribution": ideco_monthly_contribution,
+                "ideco_annual_limit": ideco_annual_limit,
+                "annual_pension": annual_pension,
+                "pension_start_age": pension_start_age,
+                "prior_year_income": prior_year_income,
+                "household_size": household_size,
+                "taxable_gain_ratio_pct": taxable_gain_ratio_pct,
+            },
+            "results": {
+                "asset_depletion_label": result.asset_depletion_label,
+                "net_annual_spending": result.net_annual_spending,
+                "recommended_monthly_spending": result.recommended_monthly_spending,
+                "cash_months": result.cash_months,
+                "target_cash": target_cash,
+                "additional_investment": additional_investment,
+                "investment_withdrawal": investment_withdrawal,
+                "recommended_action": recommended_action,
+                "pension_gap_after_start": tax_result.pension_gap_after_start,
+                "nisa_remaining_limit": tax_result.nisa_remaining_limit,
+                "nisa_growth_remaining_limit": tax_result.nisa_growth_remaining_limit,
+                "nisa_annual_room": tax_result.nisa_annual_room,
+                "ideco_annual_contribution": tax_result.ideco_annual_contribution,
+            },
+            "scenarios": [
+                {
+                    "name": scenario.name,
+                    "final_assets": scenario.final_assets,
+                    "min_assets": scenario.min_assets,
+                    "depleted_at": scenario.depleted_at,
+                }
+                for scenario in result.scenario_summaries
+            ],
+        }
+
+
+        st.subheader("10. 現在のFIRE状態")
+
+        m1, m2, m3, m4 = st.columns(4)
+
+        m1.metric(
+            "純年間支出",
+            f"{result.net_annual_spending:,.0f}万円",
+        )
+
+        m2.metric(
+            "推奨月間支出",
+            f"{result.recommended_monthly_spending:,.1f}万円",
+        )
+
+        m3.metric(
+            "現金生活費",
+            f"{result.cash_months:.1f}か月",
+        )
+
+        m4.metric(
+            "資産寿命",
+            result.asset_depletion_label,
+        )
+
         st.caption(
-            f"今回のプランに含まれる課税口座の取り崩しにかかる税金の目安は"
-            f"合計{withdrawal_plan.total_estimated_tax:,.1f}万円です"
-            "（簡易的な目安であり、実際の税額とは異なる場合があります）。"
+            "※このセクションの「推奨月間支出」は、安全余裕率のみを反映した"
+            "シミュレーションの基礎数値です。市場環境・社会保険料・悲観ケース"
+            "判定などを反映した実際の生活費の目安は「4. 今月のFIRE判定」を"
+            "ご覧ください。"
         )
 
-    if withdrawal_plan.dipped_into_cash_buffer:
-        st.warning(
-            "最低現金バッファを一時的に下回る取り崩し案です。"
-            "早めにバッファの補充を検討してください。"
+        st.info(result.advice)
+
+        st.subheader("11. 資産推移")
+
+        chart_df = result.yearly_df.set_index("age")[
+            ["standard", "bear", "bull"]
+        ]
+
+        chart_df.columns = [
+            "標準",
+            "悲観",
+            "楽観",
+        ]
+
+        st.line_chart(
+            chart_df,
+            use_container_width=True,
         )
 
-    if withdrawal_plan.shortfall_uncovered > 0.005:
-        st.error(
-            f"現金・課税口座・NISA・iDeCo・年金では"
-            f"{withdrawal_plan.shortfall_uncovered:,.1f}万円が不足しています。"
-            "生活費の見直しが必要な水準です。"
-        )
+        st.subheader("12. シナリオ結果")
 
-    _safe_log_event(
-        "simulation_executed",
-        f"FIREシミュレーションを実行しました（市場環境: {market_condition}）。",
-    )
+        scenario_cols = st.columns(3)
 
-    st.session_state["latest_simulation"] = {
-        "name": "FIREシミュレーション",
-        "inputs": {
-            "current_age": current_age,
-            "end_age": end_age,
-            "current_assets": current_assets,
-            "cash_assets": cash_assets,
-            "annual_spending": annual_spending,
-            "annual_side_income": annual_side_income,
-            "expected_return": expected_return,
-            "inflation": inflation,
-            "safety_margin": safety_margin,
-            "min_cash_months": min_cash_months,
-            "market_condition": market_condition,
-            "nisa_assets": nisa_assets,
-            "nisa_contributed": nisa_contributed,
-            "nisa_growth_contributed": nisa_growth_contributed,
-            "nisa_annual_contributed": nisa_annual_contributed,
-            "taxable_assets": taxable_assets,
-            "ideco_assets": ideco_assets,
-            "ideco_monthly_contribution": ideco_monthly_contribution,
-            "ideco_annual_limit": ideco_annual_limit,
-            "annual_pension": annual_pension,
-            "pension_start_age": pension_start_age,
-        },
-        "results": {
-            "asset_depletion_label": result.asset_depletion_label,
-            "net_annual_spending": result.net_annual_spending,
-            "recommended_monthly_spending": result.recommended_monthly_spending,
-            "cash_months": result.cash_months,
-            "target_cash": target_cash,
-            "additional_investment": additional_investment,
-            "investment_withdrawal": investment_withdrawal,
-            "recommended_action": recommended_action,
-            "pension_gap_after_start": tax_result.pension_gap_after_start,
-            "nisa_remaining_limit": tax_result.nisa_remaining_limit,
-            "nisa_growth_remaining_limit": tax_result.nisa_growth_remaining_limit,
-            "nisa_annual_room": tax_result.nisa_annual_room,
-            "ideco_annual_contribution": tax_result.ideco_annual_contribution,
-        },
-        "scenarios": [
-            {
-                "name": scenario.name,
-                "final_assets": scenario.final_assets,
-                "min_assets": scenario.min_assets,
-                "depleted_at": scenario.depleted_at,
-            }
-            for scenario in result.scenario_summaries
-        ],
-    }
+        for col, scenario in zip(
+            scenario_cols,
+            result.scenario_summaries,
+        ):
+            with col:
+                st.markdown(f"### {scenario.name}")
 
+                st.write(
+                    f"終了時資産：**{scenario.final_assets:,.0f}万円**"
+                )
 
-    st.subheader("10. 現在のFIRE状態")
+                st.write(
+                    f"最低資産：**{scenario.min_assets:,.0f}万円**"
+                )
 
-    m1, m2, m3, m4 = st.columns(4)
-
-    m1.metric(
-        "純年間支出",
-        f"{result.net_annual_spending:,.0f}万円",
-    )
-
-    m2.metric(
-        "推奨月間支出",
-        f"{result.recommended_monthly_spending:,.1f}万円",
-    )
-
-    m3.metric(
-        "現金生活費",
-        f"{result.cash_months:.1f}か月",
-    )
-
-    m4.metric(
-        "資産寿命",
-        result.asset_depletion_label,
-    )
-
-    st.caption(
-        "※このセクションの「推奨月間支出」は、安全余裕率のみを反映した"
-        "シミュレーションの基礎数値です。市場環境・社会保険料・悲観ケース"
-        "判定などを反映した実際の生活費の目安は「4. 今月のFIRE判定」を"
-        "ご覧ください。"
-    )
-
-    st.info(result.advice)
-
-    st.subheader("11. 資産推移")
-
-    chart_df = result.yearly_df.set_index("age")[
-        ["standard", "bear", "bull"]
-    ]
-
-    chart_df.columns = [
-        "標準",
-        "悲観",
-        "楽観",
-    ]
-
-    st.line_chart(
-        chart_df,
-        use_container_width=True,
-    )
-
-    st.subheader("12. シナリオ結果")
-
-    scenario_cols = st.columns(3)
-
-    for col, scenario in zip(
-        scenario_cols,
-        result.scenario_summaries,
-    ):
-        with col:
-            st.markdown(f"### {scenario.name}")
-
-            st.write(
-                f"終了時資産：**{scenario.final_assets:,.0f}万円**"
-            )
-
-            st.write(
-                f"最低資産：**{scenario.min_assets:,.0f}万円**"
-            )
-
-            st.write(
-                f"資産枯渇：**{scenario.depleted_at}**"
-            )
+                st.write(
+                    f"資産枯渇：**{scenario.depleted_at}**"
+                )
 
 else:
     st.markdown(
@@ -1310,229 +1508,230 @@ else:
     )
 
 
-st.subheader("13. 保存・履歴管理")
+with st.expander("📁 保存・履歴管理（13）", expanded=not simple_mode):
+    st.subheader("13. 保存・履歴管理")
 
-latest_simulation = st.session_state.get(
-    "latest_simulation"
-)
-
-if latest_simulation:
-    st.write(
-        "直前のシミュレーション結果を名前を付けて保存できます。"
+    latest_simulation = st.session_state.get(
+        "latest_simulation"
     )
 
-    history_name = st.text_input(
-        "履歴名",
-        value=latest_simulation.get(
-            "name",
-            "FIREシミュレーション",
-        ),
-        key="history_name",
-    )
-
-    if st.button(
-        "💾 最新結果を履歴に保存",
-        use_container_width=True,
-    ):
-        record = dict(latest_simulation)
-        record["name"] = history_name.strip() or "FIREシミュレーション"
-
-        save_history(
-            record,
-            path=HISTORY_PATH,
+    if latest_simulation:
+        st.write(
+            "直前のシミュレーション結果を名前を付けて保存できます。"
         )
 
-        _safe_log_event(
-            "history_saved",
-            f"シミュレーション結果を履歴に保存しました（名称: {record['name']}）。",
+        history_name = st.text_input(
+            "履歴名",
+            value=latest_simulation.get(
+                "name",
+                "FIREシミュレーション",
+            ),
+            key="history_name",
         )
 
-        st.success(
-            f"「{record['name']}」を履歴に保存しました。"
-        )
-        st.rerun()
-else:
-    st.info(
-        "「FIREシミュレーションを実行」を先に実行すると、"
-        "ここから結果を保存できます。"
-    )
+        if st.button(
+            "💾 最新結果を履歴に保存",
+            use_container_width=True,
+        ):
+            record = dict(latest_simulation)
+            record["name"] = history_name.strip() or "FIREシミュレーション"
 
-history_records = load_history(
-    path=HISTORY_PATH,
-)
+            save_history(
+                record,
+                path=HISTORY_PATH,
+            )
 
-if history_records:
-    st.markdown("### 保存済み履歴")
+            _safe_log_event(
+                "history_saved",
+                f"シミュレーション結果を履歴に保存しました（名称: {record['name']}）。",
+            )
 
-    st.caption(
-        f"最大20件まで保存されます。現在 {len(history_records)} 件。"
-    )
-
-    st.caption(
-        "各履歴の「📄 レポート」ボタンから、入力条件・判定結果をまとめた"
-        "HTMLファイルをダウンロードできます。ブラウザで開いて「印刷」→"
-        "「PDFとして保存」でPDF化することもできます。"
-    )
-
-    history_keyword_filter = st.text_input(
-        "履歴名で検索",
-        value="",
-        placeholder="例: 楽観シナリオ",
-        key="history_keyword_filter",
-    )
-
-    history_date_col1, history_date_col2 = st.columns(2)
-    with history_date_col1:
-        history_start_date = st.date_input(
-            "作成日（開始・この日を含む）",
-            value=None,
-            key="history_start_date",
-        )
-    with history_date_col2:
-        history_end_date = st.date_input(
-            "作成日（終了・この日を含む）",
-            value=None,
-            key="history_end_date",
+            st.success(
+                f"「{record['name']}」を履歴に保存しました。"
+            )
+            st.rerun()
+    else:
+        st.info(
+            "「FIREシミュレーションを実行」を先に実行すると、"
+            "ここから結果を保存できます。"
         )
 
-    filtered_history_records = filter_history(
-        history_records,
-        keyword=history_keyword_filter,
-        start_date=str(history_start_date) if history_start_date else None,
-        end_date=str(history_end_date) if history_end_date else None,
+    history_records = load_history(
+        path=HISTORY_PATH,
     )
 
-    st.caption(f"絞り込み後の件数: {len(filtered_history_records)}件")
+    if history_records:
+        st.markdown("### 保存済み履歴")
 
-    if not filtered_history_records:
-        st.info("条件に一致する履歴はありません。")
+        st.caption(
+            f"最大20件まで保存されます。現在 {len(history_records)} 件。"
+        )
 
-    for index, record in enumerate(filtered_history_records):
-        record_id = record.get("id", "")
-        results = record.get("results", {})
+        st.caption(
+            "各履歴の「📄 レポート」ボタンから、入力条件・判定結果をまとめた"
+            "HTMLファイルをダウンロードできます。ブラウザで開いて「印刷」→"
+            "「PDFとして保存」でPDF化することもできます。"
+        )
 
-        with st.container(border=True):
-            c1, c2 = st.columns([4, 1])
+        history_keyword_filter = st.text_input(
+            "履歴名で検索",
+            value="",
+            placeholder="例: 楽観シナリオ",
+            key="history_keyword_filter",
+        )
 
-            with c1:
-                st.markdown(
-                    f"**{record.get('name', '名称未設定')}**"
-                )
+        history_date_col1, history_date_col2 = st.columns(2)
+        with history_date_col1:
+            history_start_date = st.date_input(
+                "作成日（開始・この日を含む）",
+                value=None,
+                key="history_start_date",
+            )
+        with history_date_col2:
+            history_end_date = st.date_input(
+                "作成日（終了・この日を含む）",
+                value=None,
+                key="history_end_date",
+            )
 
-                st.caption(
-                    record.get(
-                        "created_at",
-                        "日時不明",
-                    )
-                )
+        filtered_history_records = filter_history(
+            history_records,
+            keyword=history_keyword_filter,
+            start_date=str(history_start_date) if history_start_date else None,
+            end_date=str(history_end_date) if history_end_date else None,
+        )
 
-                st.write(
-                    f"資産寿命判定: "
-                    f"**{results.get('asset_depletion_label', '---')}**"
-                )
+        st.caption(f"絞り込み後の件数: {len(filtered_history_records)}件")
 
-                st.write(
-                    f"純年間支出: "
-                    f"**{results.get('net_annual_spending', 0):,.0f}万円**"
-                )
+        if not filtered_history_records:
+            st.info("条件に一致する履歴はありません。")
 
-                st.write(
-                    f"現金: "
-                    f"**{results.get('cash_months', 0):,.1f}か月**"
-                )
+        for index, record in enumerate(filtered_history_records):
+            record_id = record.get("id", "")
+            results = record.get("results", {})
 
-                rename_col1, rename_col2 = st.columns([3, 1])
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
 
-                with rename_col1:
-                    new_name = st.text_input(
-                        "名称を変更",
-                        value=record.get("name", "名称未設定"),
-                        key=f"rename_history_input_{record_id}_{index}",
-                        label_visibility="collapsed",
+                with c1:
+                    st.markdown(
+                        f"**{record.get('name', '名称未設定')}**"
                     )
 
-                with rename_col2:
-                    if st.button(
-                        "✏️ 名称変更",
-                        key=f"rename_history_{record_id}_{index}",
-                        use_container_width=True,
-                    ):
-                        try:
-                            renamed = rename_history(
-                                record_id,
-                                new_name,
-                                path=HISTORY_PATH,
-                            )
-                        except ValueError as error:
-                            st.warning(str(error))
-                        else:
-                            if renamed:
-                                _safe_log_event(
-                                    "history_renamed",
-                                    "履歴の名称を変更しました。",
+                    st.caption(
+                        record.get(
+                            "created_at",
+                            "日時不明",
+                        )
+                    )
+
+                    st.write(
+                        f"資産寿命判定: "
+                        f"**{results.get('asset_depletion_label', '---')}**"
+                    )
+
+                    st.write(
+                        f"純年間支出: "
+                        f"**{results.get('net_annual_spending', 0):,.0f}万円**"
+                    )
+
+                    st.write(
+                        f"現金: "
+                        f"**{results.get('cash_months', 0):,.1f}か月**"
+                    )
+
+                    rename_col1, rename_col2 = st.columns([3, 1])
+
+                    with rename_col1:
+                        new_name = st.text_input(
+                            "名称を変更",
+                            value=record.get("name", "名称未設定"),
+                            key=f"rename_history_input_{record_id}_{index}",
+                            label_visibility="collapsed",
+                        )
+
+                    with rename_col2:
+                        if st.button(
+                            "✏️ 名称変更",
+                            key=f"rename_history_{record_id}_{index}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                renamed = rename_history(
+                                    record_id,
+                                    new_name,
+                                    path=HISTORY_PATH,
                                 )
-                                st.rerun()
+                            except ValueError as error:
+                                st.warning(str(error))
                             else:
-                                st.warning(
-                                    "対象の履歴が見つかりませんでした。"
-                                )
+                                if renamed:
+                                    _safe_log_event(
+                                        "history_renamed",
+                                        "履歴の名称を変更しました。",
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.warning(
+                                        "対象の履歴が見つかりませんでした。"
+                                    )
 
-            with c2:
-                try:
-                    report_html = build_report_html(record)
-                except ValueError:
-                    report_html = None
+                with c2:
+                    try:
+                        report_html = build_report_html(record)
+                    except ValueError:
+                        report_html = None
 
-                if report_html is not None:
-                    st.download_button(
-                        "📄 レポート",
-                        data=report_html,
-                        file_name=report_filename(record),
-                        mime="text/html",
-                        key=f"report_history_{record_id}_{index}",
-                        use_container_width=True,
-                    )
+                    if report_html is not None:
+                        st.download_button(
+                            "📄 レポート",
+                            data=report_html,
+                            file_name=report_filename(record),
+                            mime="text/html",
+                            key=f"report_history_{record_id}_{index}",
+                            use_container_width=True,
+                        )
 
-                if st.button(
-                    "🗑️ 削除",
-                    key=f"delete_history_{record_id}_{index}",
-                ):
-                    delete_history(
-                        record_id,
-                        path=HISTORY_PATH,
-                    )
-                    _safe_log_event(
-                        "history_deleted",
-                        "履歴を1件削除しました。",
-                    )
-                    st.rerun()
+                    if st.button(
+                        "🗑️ 削除",
+                        key=f"delete_history_{record_id}_{index}",
+                    ):
+                        delete_history(
+                            record_id,
+                            path=HISTORY_PATH,
+                        )
+                        _safe_log_event(
+                            "history_deleted",
+                            "履歴を1件削除しました。",
+                        )
+                        st.rerun()
 
-    st.markdown("### 履歴のエクスポート")
+        st.markdown("### 履歴のエクスポート")
 
-    st.caption(
-        "検索・期間で絞り込んだ結果をCSVでダウンロードできます"
-        "（絞り込みが未入力の場合は全件が対象です）。"
-        "20件の上限で古い履歴が消える前の保管用途にもご利用いただけます。"
-    )
-
-    st.download_button(
-        label="📥 保存済み履歴をCSVでダウンロード",
-        data=export_history_to_csv(filtered_history_records),
-        file_name=history_export_filename(),
-        mime="text/csv",
-        use_container_width=True,
-        disabled=not filtered_history_records,
-    )
-
-    if st.button(
-        "🗑️ 全履歴を削除",
-        use_container_width=True,
-    ):
-        clear_history(path=HISTORY_PATH)
-        _safe_log_event(
-            "history_cleared",
-            "保存済みの履歴をすべて削除しました。",
+        st.caption(
+            "検索・期間で絞り込んだ結果をCSVでダウンロードできます"
+            "（絞り込みが未入力の場合は全件が対象です）。"
+            "20件の上限で古い履歴が消える前の保管用途にもご利用いただけます。"
         )
-        st.rerun()
-else:
-    st.info("保存済み履歴はありません。")
+
+        st.download_button(
+            label="📥 保存済み履歴をCSVでダウンロード",
+            data=export_history_to_csv(filtered_history_records),
+            file_name=history_export_filename(),
+            mime="text/csv",
+            use_container_width=True,
+            disabled=not filtered_history_records,
+        )
+
+        if st.button(
+            "🗑️ 全履歴を削除",
+            use_container_width=True,
+        ):
+            clear_history(path=HISTORY_PATH)
+            _safe_log_event(
+                "history_cleared",
+                "保存済みの履歴をすべて削除しました。",
+            )
+            st.rerun()
+    else:
+        st.info("保存済み履歴はありません。")

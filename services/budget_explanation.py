@@ -89,6 +89,43 @@ _DISPLAY_ORDER = (
     "resident_tax_deducted",
 )
 
+# Sprint36で追加。reasonsタグが増え続けてもフラットな箇条書きが
+# 際限なく伸びないよう、タグを4つのカテゴリにグルーピングして表示する。
+# 新しいタグを追加する際は、_REASON_LABELS・_DISPLAY_ORDERに加えて
+# ここにカテゴリを1行追加するだけでよい（app.py側の変更は不要）。
+_REASON_CATEGORY = {
+    "market_crash_active": "living_cost_adjustment",
+    "bear_case_depletes": "living_cost_adjustment",
+    "cash_buffer_below_target": "living_cost_adjustment",
+    "cash_buffer_healthy": "living_cost_adjustment",
+    "bear_market_active": "living_cost_adjustment",
+    "early_retirement_stage": "living_cost_adjustment",
+    "late_stage_conservative": "living_cost_adjustment",
+    "sequence_risk_applied": "living_cost_adjustment",
+    "sequence_risk_evaluated": "living_cost_adjustment",
+    "upside_allowed": "max_spending",
+    "large_expense_exceeds_cash_surplus": "large_expense",
+    "large_expense_within_cash_surplus": "large_expense",
+    "social_insurance_deducted": "fixed_cost_deduction",
+    "resident_tax_deducted": "fixed_cost_deduction",
+}
+
+_CATEGORY_LABELS = {
+    "living_cost_adjustment": "生活費調整の主な要因",
+    "max_spending": "上限生活費",
+    "large_expense": "今月以降の大型支出",
+    "fixed_cost_deduction": "固定費の控除（概算）",
+}
+
+# カテゴリの表示順序。この並びにないカテゴリキーは表示されない
+# （_REASON_CATEGORYの値は必ずこの中のいずれかにすること）。
+_CATEGORY_ORDER = (
+    "living_cost_adjustment",
+    "max_spending",
+    "large_expense",
+    "fixed_cost_deduction",
+)
+
 # binding_safe_factor_reason → 一覧の先頭に出す「今、何が一番効いているか」
 # の短いラベル。
 _BINDING_LABELS = {
@@ -103,9 +140,17 @@ _BINDING_LABELS = {
 
 
 @dataclass
+class BudgetExplanationGroup:
+    """カテゴリ1つ分の見出しと、そのカテゴリに属する説明文のリスト。"""
+
+    category_label: str
+    details: List[str] = field(default_factory=list)
+
+
+@dataclass
 class BudgetExplanation:
     binding_summary: str
-    details: List[str] = field(default_factory=list)
+    groups: List[BudgetExplanationGroup] = field(default_factory=list)
 
 
 def build_budget_explanation(
@@ -117,8 +162,9 @@ def build_budget_explanation(
 
     このモジュールはmonthly_budget_engineの計算結果を受け取って文章化
     するだけで、係数や金額の再計算は一切行わない。
+    該当するタグが1つもないカテゴリはgroupsに含めない。
     """
-    details: List[str] = []
+    details_by_category: dict[str, List[str]] = {}
     seen = set()
 
     for tag in _DISPLAY_ORDER:
@@ -131,9 +177,19 @@ def build_budget_explanation(
             continue
 
         label = _REASON_LABELS.get(tag)
-        if label:
-            details.append(label)
+        category = _REASON_CATEGORY.get(tag)
+        if label and category:
+            details_by_category.setdefault(category, []).append(label)
             seen.add(tag)
+
+    groups = [
+        BudgetExplanationGroup(
+            category_label=_CATEGORY_LABELS[category],
+            details=details_by_category[category],
+        )
+        for category in _CATEGORY_ORDER
+        if category in details_by_category
+    ]
 
     if binding_safe_factor_reason == "cash_buffer_healthy":
         binding_summary = (
@@ -151,5 +207,5 @@ def build_budget_explanation(
 
     return BudgetExplanation(
         binding_summary=binding_summary,
-        details=details,
+        groups=groups,
     )

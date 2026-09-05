@@ -1,0 +1,11 @@
+[
+  {
+    "month": "2026-09",
+    "safe_monthly": 5.72,
+    "recommended_monthly": 9.1,
+    "max_monthly": 9.1,
+    "status": "red",
+    "binding_safe_factor_reason": "bear_case_depletes",
+    "recorded_at": "2026-09-05T10:52:22+00:00"
+  }
+]
