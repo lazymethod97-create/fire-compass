@@ -86,6 +86,7 @@ def calculate_monthly_budget(
     pension_start_age: Optional[int] = None,
     sequence_risk_factor: Optional[float] = None,
     monthly_social_insurance: float = 0.0,
+    monthly_resident_tax: float = 0.0,
 ) -> MonthlyBudgetResult:
     """run_fire_simulationとcalculate_monthly_actionの出力から、
     今月の安全生活費・推奨生活費・上限生活費とガードレール判定を算出する。
@@ -153,6 +154,16 @@ def calculate_monthly_budget(
     （他の格下げ要因と異なり、格下げ判定ではなく金額の直接控除のみを
     行う設計。既存のupcoming_large_expenseによるgreen→yellow格下げ判定は
     差し引き後の金額ではなく従来通りcash_surplusとの比較で行う）。
+
+    monthly_resident_tax（Sprint 32で追加、省略可能・デフォルト0.0）は、
+    services.resident_tax_engineで算出した住民税の月額目安（万円）。
+    monthly_social_insuranceと同じ性質の固定費（前年所得を基準に決まり、
+    FIRE後は自分で納付が必要になる）として扱い、同様に安全・推奨・上限
+    生活費それぞれから直接差し引く（0円未満にはならないようフロア処理、
+    ガードレール判定自体は変化しない）。monthly_social_insuranceとは
+    別のreasonsタグ（"resident_tax_deducted"）で記録し、UI側でどちらが
+    どれだけ効いているかを区別できるようにしている。デフォルト0.0の場合は
+    既存呼び出しと完全に同じ挙動になる。
     """
     if upcoming_large_expense < 0:
         raise ValueError("大型支出予定の合計額は0以上にしてください。")
@@ -165,6 +176,9 @@ def calculate_monthly_budget(
 
     if monthly_social_insurance < 0:
         raise ValueError("社会保険料の月額は0以上にしてください。")
+
+    if monthly_resident_tax < 0:
+        raise ValueError("住民税の月額は0以上にしてください。")
 
     recommended_monthly = fire_result.recommended_monthly_spending
     reasons: List[str] = []
@@ -273,6 +287,17 @@ def calculate_monthly_budget(
         )
         max_monthly = round(max(max_monthly - monthly_social_insurance, 0.0), 2)
         reasons.append("social_insurance_deducted")
+
+    # --- 住民税の直接控除（Sprint 32） ---
+    # monthly_social_insuranceと同じ設計方針（係数調整ではなく直接控除、
+    # ガードレール判定自体には影響しない）。別のreasonsタグで記録する。
+    if monthly_resident_tax > 0.005:
+        safe_monthly = round(max(safe_monthly - monthly_resident_tax, 0.0), 2)
+        recommended_monthly = round(
+            max(recommended_monthly - monthly_resident_tax, 0.0), 2
+        )
+        max_monthly = round(max(max_monthly - monthly_resident_tax, 0.0), 2)
+        reasons.append("resident_tax_deducted")
 
     return MonthlyBudgetResult(
         safe_monthly=safe_monthly,

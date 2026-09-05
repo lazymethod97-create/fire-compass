@@ -4,22 +4,24 @@ import csv
 import hashlib
 import io
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from services.comparison_engine import METRIC_DEFS, format_comparison_value
+from services.security import PUBLIC_MODE_ENV, is_public_mode as _shared_is_public_mode
 
 DEFAULT_HISTORY_PATH = ".fire_compass_history.json"
 DEFAULT_MAX_RECORDS = 20
-PUBLIC_MODE_ENV = "FIRE_COMPASS_PUBLIC_MODE"
 
 
 def _is_public_mode() -> bool:
-    return os.getenv(PUBLIC_MODE_ENV, "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    """公開モード判定の実体はservices.security.is_public_mode()に委譲する
+    （Sprint 32でDRY化。従来history_manager.py内で独自に再実装していた
+    判定ロジックをservices.security.pyの実装1本にまとめた）。
+    関数名・戻り値の挙動は従来と完全に同じで、呼び出し側への影響はない。
+    """
+    return _shared_is_public_mode()
 
 
 def _streamlit_session_suffix() -> str | None:

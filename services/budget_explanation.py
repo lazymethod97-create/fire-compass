@@ -64,6 +64,10 @@ _REASON_LABELS = {
         "国民健康保険料・国民年金保険料の月額目安を、安全・推奨・上限生活費"
         "から直接差し引いています。"
     ),
+    "resident_tax_deducted": (
+        "住民税の月額目安を、安全・推奨・上限生活費から直接差し引いて"
+        "います。"
+    ),
 }
 
 # 表示順序（安全生活費の判定に関わる主要因 → ステージ調整 → 系列リスク →
@@ -82,6 +86,7 @@ _DISPLAY_ORDER = (
     "large_expense_exceeds_cash_surplus",
     "large_expense_within_cash_surplus",
     "social_insurance_deducted",
+    "resident_tax_deducted",
 )
 
 # binding_safe_factor_reason → 一覧の先頭に出す「今、何が一番効いているか」

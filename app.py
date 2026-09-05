@@ -34,6 +34,7 @@ from services.history_manager import (
     rename_history,
     save_history,
 )
+from services.report_generator import build_report_html, report_filename
 from services.tax_optimization import TaxOptimizationInput, run_tax_optimization
 from services.asset_import_engine import (
     AssetImportError,
@@ -42,12 +43,20 @@ from services.asset_import_engine import (
 )
 from services.portfolio_balance_engine import analyze_portfolio_balance
 from services.social_insurance_engine import calculate_social_insurance
+from services.resident_tax_engine import calculate_resident_tax
+from services.actual_spending_engine import (
+    build_spending_comparison,
+    delete_actual_spending,
+    load_actual_spending,
+    record_actual_spending,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
 EVENT_LOG_PATH = os.path.join(BASE_DIR, ".fire_compass_events.log")
 LARGE_EXPENSE_PATH = os.path.join(BASE_DIR, ".fire_compass_large_expenses.json")
 JUDGMENT_TREND_PATH = os.path.join(BASE_DIR, ".fire_compass_judgment_trend.json")
+ACTUAL_SPENDING_PATH = os.path.join(BASE_DIR, ".fire_compass_actual_spending.json")
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 st.set_page_config(
     page_title="FIRE Compass",
@@ -461,14 +470,15 @@ pension_start_age = st.number_input(
     step=1,
 )
 
-st.subheader("3.7. 社会保険料（国民健康保険・国民年金）")
+st.subheader("3.7. 社会保険料・住民税（国民健康保険・国民年金・住民税）")
 
 st.caption(
-    "FIRE後は給与天引きがなくなり、国民健康保険料・国民年金保険料を"
+    "FIRE後は給与天引きがなくなり、国民健康保険料・国民年金保険料・住民税を"
     "自分で納付する必要があります。ここで算出した月額目安は、"
     "「4. 今月のFIRE判定」の安全・推奨・上限生活費から直接差し引かれます。"
-    "国民健康保険料は自治体ごとに料率が異なるため、ここでの金額は"
-    "全国的な簡易モデルによる概算です。正確な金額は居住自治体でご確認ください。"
+    "国民健康保険料・住民税は自治体ごとに料率・軽減制度が異なるため、"
+    "ここでの金額は全国的な簡易モデルによる概算です。正確な金額は"
+    "居住自治体でご確認ください。"
 )
 
 si1, si2 = st.columns(2)
@@ -481,7 +491,7 @@ with si1:
         step=10.0,
         help=(
             "給与所得だけでなく、課税口座の譲渡益・配当など"
-            "国民健康保険料の所得割算定に含まれる所得の合計を目安として"
+            "国民健康保険料・住民税の算定に含まれる所得の合計を目安として"
             "入力してください。FIRE直後の1〜2年は在職中の高い所得が"
             "基準になる点にご注意ください。"
         ),
@@ -494,7 +504,11 @@ with si2:
         max_value=10,
         value=1,
         step=1,
-        help="均等割の算定に使用します。国民健康保険に加入する世帯人数です。",
+        help=(
+            "国民健康保険料の均等割の算定に使用します"
+            "（住民税の均等割は個人単位の定額のため、この人数の影響を"
+            "受けません）。"
+        ),
     )
 
 social_insurance_result = calculate_social_insurance(
@@ -503,7 +517,9 @@ social_insurance_result = calculate_social_insurance(
     current_age=current_age,
 )
 
-si_m1, si_m2, si_m3 = st.columns(3)
+resident_tax_result = calculate_resident_tax(prior_year_income=prior_year_income)
+
+si_m1, si_m2, si_m3, si_m4 = st.columns(4)
 
 si_m1.metric(
     "国民健康保険料（月額目安）",
@@ -516,11 +532,16 @@ si_m2.metric(
 )
 
 si_m3.metric(
-    "社会保険料合計（月額目安）",
-    f"{social_insurance_result.monthly_total:,.1f}万円",
+    "住民税（月額目安）",
+    f"{resident_tax_result.monthly_total:,.1f}万円",
 )
 
-with st.expander("国民健康保険料の内訳を見る"):
+si_m4.metric(
+    "合計（月額目安）",
+    f"{social_insurance_result.monthly_total + resident_tax_result.monthly_total:,.1f}万円",
+)
+
+with st.expander("国民健康保険料・住民税の内訳を見る"):
     for component in social_insurance_result.health_insurance_components:
         capped_note = "（賦課限度額に到達）" if component.capped else ""
         st.write(
@@ -528,7 +549,14 @@ with st.expander("国民健康保険料の内訳を見る"):
             f"均等割 {component.per_capita_levy:,.1f}万円 ＝ "
             f"{component.capped_amount:,.1f}万円{capped_note}"
         )
+    st.write(
+        f"- 住民税：所得割 {resident_tax_result.income_levy:,.1f}万円 ＋ "
+        f"均等割 {resident_tax_result.per_capita_levy:,.1f}万円 ＝ "
+        f"{resident_tax_result.annual_total:,.1f}万円/年"
+    )
     for note in social_insurance_result.notes:
+        st.caption(f"※ {note}")
+    for note in resident_tax_result.notes:
         st.caption(f"※ {note}")
 
 run = st.button(
@@ -585,6 +613,7 @@ if run:
         pension_start_age=pension_start_age,
         sequence_risk_factor=sequence_risk_result.risk_factor,
         monthly_social_insurance=social_insurance_result.monthly_total,
+        monthly_resident_tax=resident_tax_result.monthly_total,
     )
 
     strategy = calculate_crash_strategy(
@@ -675,6 +704,13 @@ if run:
             "安全・推奨・上限生活費から差し引いています。"
         )
 
+    if "resident_tax_deducted" in monthly_budget.reasons:
+        st.caption(
+            f"住民税の月額目安"
+            f"（{resident_tax_result.monthly_total:,.1f}万円）を"
+            "安全・推奨・上限生活費から差し引いています。"
+        )
+
     budget_explanation = build_budget_explanation(
         monthly_budget.reasons, monthly_budget.binding_safe_factor_reason
     )
@@ -711,12 +747,20 @@ if run:
     st.subheader("4.5. 今月のFIRE判定の推移")
 
     judgment_trend_records = load_judgment_trend(path=JUDGMENT_TREND_PATH)
+    actual_spending_records = load_actual_spending(path=ACTUAL_SPENDING_PATH)
+    actual_amount_by_month = {
+        record["month"]: record["actual_amount"]
+        for record in actual_spending_records
+    }
 
     if len(judgment_trend_records) >= 2:
         trend_df = pd.DataFrame(judgment_trend_records).set_index("month")[
             ["safe_monthly", "recommended_monthly", "max_monthly"]
         ]
         trend_df.columns = ["安全生活費", "推奨生活費", "上限生活費"]
+        trend_df["実際の支出"] = [
+            actual_amount_by_month.get(month) for month in trend_df.index
+        ]
 
         st.line_chart(trend_df, use_container_width=True)
 
@@ -728,6 +772,12 @@ if run:
                 for record in judgment_trend_records
             )
         )
+
+        if not actual_amount_by_month:
+            st.caption(
+                "「実際の支出」は下の「12.5. 使っていい額と実際に使った額の"
+                "突き合わせ」で記録すると、このグラフに重ねて表示されます。"
+            )
     else:
         st.caption(
             "記録された月が2か月未満のため、推移グラフはまだ表示できません。"
@@ -1154,6 +1204,112 @@ else:
 > 入力条件に基づくシミュレーションと行動候補を表示します。
 """
     )
+current_month = date.today().strftime("%Y-%m")
+judgment_trend_records = load_judgment_trend(path=JUDGMENT_TREND_PATH)
+actual_spending_records = load_actual_spending(path=ACTUAL_SPENDING_PATH)
+
+st.subheader("12.5. 使っていい額と実際に使った額の突き合わせ")
+
+st.caption(
+    "毎月実際に使った金額を記録すると、「4. 今月のFIRE判定」で算出した"
+    "安全・推奨・上限生活費とどれだけ差があったかを振り返れます。"
+    "この記録は判定の計算そのものには使われません（あくまで振り返り用です）。"
+)
+
+as1, as2, as3 = st.columns([2, 2, 1])
+
+with as1:
+    actual_spending_month = st.text_input(
+        "記録する月（YYYY-MM）",
+        value=current_month,
+        key="actual_spending_month",
+    )
+
+with as2:
+    actual_spending_amount = st.number_input(
+        "実際に使った金額（万円）",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        key="actual_spending_amount",
+    )
+
+with as3:
+    st.write("")
+    st.write("")
+    if st.button("💾 記録する", use_container_width=True):
+        try:
+            record_actual_spending(
+                actual_spending_month,
+                actual_spending_amount,
+                path=ACTUAL_SPENDING_PATH,
+            )
+        except ValueError as error:
+            st.warning(str(error))
+        else:
+            _safe_log_event(
+                "actual_spending_recorded",
+                f"実際に使った金額を記録しました（{actual_spending_month}）。",
+            )
+            st.rerun()
+
+spending_comparison = build_spending_comparison(
+    actual_spending_records, judgment_trend_records
+)
+spending_comparison_with_actual = [
+    row for row in spending_comparison if row.actual_amount is not None
+]
+
+if spending_comparison_with_actual:
+    comparison_df = pd.DataFrame(
+        [
+            {
+                "月": row.month,
+                "実際の支出": row.actual_amount,
+                "安全生活費": row.safe_monthly,
+                "推奨生活費": row.recommended_monthly,
+                "上限生活費": row.max_monthly,
+                "推奨との差": row.variance_vs_recommended,
+                "範囲内か": (
+                    "✅" if row.within_safe_to_max_range
+                    else "❌" if row.within_safe_to_max_range is False
+                    else "―"
+                ),
+            }
+            for row in spending_comparison_with_actual
+        ]
+    ).set_index("月")
+
+    st.dataframe(comparison_df, use_container_width=True)
+
+    st.caption(
+        "「範囲内か」は、実際の支出がその月の安全生活費〜上限生活費の"
+        "範囲に収まっていたかどうかです"
+        "（その月の判定記録がない場合は「―」と表示されます）。"
+    )
+
+    if st.button("🗑️ この月の記録を削除", key="delete_actual_spending"):
+        deleted = delete_actual_spending(
+            actual_spending_month, path=ACTUAL_SPENDING_PATH
+        )
+        if deleted:
+            _safe_log_event(
+                "actual_spending_deleted",
+                f"実際に使った金額の記録を削除しました（{actual_spending_month}）。",
+            )
+            st.rerun()
+        else:
+            st.info(
+                f"「記録する月」に入力されている{actual_spending_month}の"
+                "記録が見つかりませんでした。"
+            )
+else:
+    st.info(
+        "まだ実際の支出額が記録されていません。上のフォームから記録すると、"
+        "ここに一覧が表示されます。"
+    )
+
+
 st.subheader("13. 保存・履歴管理")
 
 latest_simulation = st.session_state.get(
@@ -1210,6 +1366,12 @@ if history_records:
 
     st.caption(
         f"最大20件まで保存されます。現在 {len(history_records)} 件。"
+    )
+
+    st.caption(
+        "各履歴の「📄 レポート」ボタンから、入力条件・判定結果をまとめた"
+        "HTMLファイルをダウンロードできます。ブラウザで開いて「印刷」→"
+        "「PDFとして保存」でPDF化することもできます。"
     )
 
     history_keyword_filter = st.text_input(
@@ -1316,6 +1478,21 @@ if history_records:
                                 )
 
             with c2:
+                try:
+                    report_html = build_report_html(record)
+                except ValueError:
+                    report_html = None
+
+                if report_html is not None:
+                    st.download_button(
+                        "📄 レポート",
+                        data=report_html,
+                        file_name=report_filename(record),
+                        mime="text/html",
+                        key=f"report_history_{record_id}_{index}",
+                        use_container_width=True,
+                    )
+
                 if st.button(
                     "🗑️ 削除",
                     key=f"delete_history_{record_id}_{index}",
