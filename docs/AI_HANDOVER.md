@@ -1,7 +1,7 @@
 ﻿# AI HANDOVER
 
 ## 現在地
-FIRE Compass Sprint 10 実装。
+FIRE Compass Sprint 26 実装（Sprint 17 定期レビュー対応完了）。
 
 ## GitHub
 Source of Truth:
@@ -684,11 +684,634 @@ python -m pytest -q
 8. git push origin main（直接push不可のためbundle経由で反映）
 9. push後にGitHub mainの最新コミットを確認
 
-## Sprint 17は定期レビュー（3Sprintごと・前回はSprint 14）
-次回のSprint開始時は、まず「機能の本当に役立っているか」定期レビューを
-実施すること（Sprint 10〜13のログ関連機能に加え、Sprint 15〜16で追加した
-履歴エクスポート・絞り込み機能も含めて、5つの観点で再評価する）。
+## Sprint 17完了
+主要機能:
+定期レビュー（3Sprintごと・前回Sprint14）の実施。
 
-## Sprint 18候補（未着手・Sprint 17レビュー結果次第で変わる可能性あり）
-- docs/ROADMAP.mdなど各ドキュメントの表記統一・軽微な整理
-- JSONファイル保存方式（履歴・ログ）の運用限界の見直し（件数増加時の性能・移行含む）
+背景:
+- Sprint16完了時点の「次の作業」で予告されていた、Sprint1〜16全機能の
+  再評価（5つの観点：使用頻度・最終ゴールとの直結度・二重表示・混乱リスク・
+  初心者の迷いにくさ・管理系機能の圧迫）
+
+結果概要:
+- Sprint1〜5（基本シミュレーション・AIアドバイス・NISA/iDeCo/年金最適化）：
+  維持。ただし「生活費」を名乗る数値がsection4・5・10の3箇所に分散しており
+  （monthly_budget.safe_monthly / strategy.recommended_monthly_spending /
+  result.recommended_monthly_spending）、混乱リスクとして指摘
+- Sprint6・7・9・14（履歴保存・レポート・比較・履歴名称変更）：維持。ただし
+  pages/7_📄_FIREレポート.pyとapp.py内蔵の「📄 レポート」ボタンが
+  build_report_html/report_filenameを共に呼び出す完全に同一機能であり、
+  二重導線と指摘
+- Sprint8（公開セキュリティガード）：機能自体は妥当だが、
+  pages/8_🔒_公開運用・セキュリティ.pyが非公開モード時（＝通常のローカル
+  個人利用）でも常時サイドバーに表示され続け、無関係な情報として指摘
+- Sprint10〜13（ログ記録・CSV・検索・フィルタ）：Sprint14レビューで
+  既に「これ以上のログ機能拡張は一旦停止すべき」と結論づけていた方針を
+  確認。today時点でも継続の方針
+- Sprint15・16（履歴CSV・検索・フィルタ）：Sprint14の凍結方針の対象は
+  app_logger.py（ログ機能）のみでhistory_manager.py（履歴機能）は
+  対象外という当時の判断自体は筋が通っているが、「Sprint13で実装した
+  ものをSprint16で別画面にも横展開する」という対称性駆動のパターンが
+  定着しつつある点は要注意。実利用頻度を見てから凍結・縮小を再検討
+- 追加指摘（アーキテクチャ）：simple_mode（Sprint20で新設）がapp.py本体
+  にしか作用しておらず、pages/8・9・10はStreamlitのpages/方式である限り
+  simple_modeの状態と無関係に常時サイドバーへ表示され続けることが判明
+- 追加指摘（計算ロジック）：取り崩しプランの
+  `monthly_budget.safe_monthly + this_month_large_expense_total`が
+  大型支出を二重計上している可能性を指摘されたが、
+  monthly_budget_engine.pyのupcoming_large_expenseはガードレール判定
+  （green→yellow格下げ）にのみ使用されsafe_monthlyからは減算されない
+  ことをコード確認済み。二重計上のバグではないと結論
+- 追加指摘：services/配下は既存99件のテストで手厚くカバーされているが、
+  session_state・UI分岐・ボタン押下順序が集中するapp.py自体には直接の
+  テストが一つもない。今後、Streamlitの`AppTest`等による軽量な統合
+  テストの検討価値ありと指摘
+
+削除・簡略化候補：
+- pages/7_📄_FIREレポート.py（app.py内蔵ボタンに一本化するため削除）
+
+このレビュー結果を踏まえ、Sprint18〜23として以下を選定した：
+1. 前回入力の自動読み込み機能（入力欄の再入力コスト解消）
+2. NISA/iDeCo/課税口座欄をセクション3.8へ移動（CSV取り込みが実行前に
+   反映されない不具合の修正、Sprint18で判明）
+3. 簡易モード＋月次チェックリスト
+4. 生活費控除（国保・国民年金・住民税）の概算重ね掛けを目立たせる表示
+5. 判定根拠（reasonsタグ）のカテゴリグルーピング
+6. レビュー対応（生活費指標の一本化・チェックリストの位置づけ明記・
+   レポート導線の統一・pages/8/9/10のsimple_mode/public_mode連携）
+
+## Sprint 18完了
+主要機能:
+前回保存した入力値を、次回起動時に自動反映する機能。
+
+背景:
+- current_age・current_assets・cash_assets・annual_spending・
+  prior_year_income等、入力欄がすべてハードコードされた初期値になって
+  おり、ブラウザセッションが切れるたび（月1回の起動のたび）に全項目を
+  手入力し直す必要があった
+
+追加・変更:
+- app.py：
+  - `PREVIOUS_INPUT_DEFAULTS`（キー→ハードコード初期値の対応表、
+    23項目）を新設
+  - 起動時（セッション内で1回だけ）に、保存済み履歴の最新レコードの
+    inputsをsession_stateへ`setdefault`で自動反映（履歴になければ
+    ハードコード初期値にフォールバック）
+  - 対象23ウィジェットを`value=`指定から`key=`指定（session_state経由）
+    に統一
+  - タイトル下に「🔄 前回の値を読み込み直す」手動ボタンを追加（強制上書き
+    ＋再実行）
+  - 「現在の市場環境」は自動判定ロジック（Sprint2）を優先するため、
+    意図的にこの読み込み対象から除外
+  - `latest_simulation["inputs"]`に`prior_year_income`・`household_size`・
+    `taxable_gain_ratio_pct`を追加（従来この3項目は履歴に保存されて
+    いなかった）
+
+設計:
+- fire_engine.py／action_engine.py／crash_strategy.py／
+  tax_optimization.py／ai_advisor.py／monthly_budget_engine.py／
+  history_manager.pyは変更しない
+- 金融計算ロジックは一切変更していない（入力欄の初期値設定のみ）
+
+テスト:
+未実行（要対応。app.py側の変更のためservices/配下の既存99件には影響
+しない想定だが、実行して確認すること）
+
+## Sprint 19完了
+主要機能:
+NISA・iDeCo・課税口座の入力欄を、実行ボタンより前のセクション3.8へ移動。
+
+背景（Sprint18中に判明した不具合）:
+- 旧「8. NISA・iDeCo・年金最適化」内にあったNISA等の入力欄が、
+  「🧭 FIREシミュレーションを実行」ボタン押下後にしか描画されない構造
+  だったため、SBI証券CSVをアップロードしてもその場では画面に反映されず、
+  一度実行ボタンを押すまで見えなかった
+
+追加・変更:
+- app.py：
+  - NISA・iDeCo・課税口座の入力欄一式を、旧セクション8から切り出し、
+    新設の「3.8. 資産内訳（NISA・iDeCo・課税口座）」として実行ボタン
+    直前（3.7の後）に移動
+  - 旧セクション8「NISA・iDeCo・年金最適化」は、
+    `run_tax_optimization`の計算結果・提案表示のみを行う場所として残す
+
+設計:
+- tax_optimization.pyを含む既存の計算モジュールは変更しない
+- 変数の再代入・計算式は一切変更せず、UI上の入力欄の位置のみを移動
+
+テスト:
+未実行（要対応）
+
+## Sprint 20完了
+主要機能:
+簡易モード（表示範囲の絞り込み）と月次チェックリスト。
+
+背景:
+- セクションが0〜13＋3.5/3.6/3.7/3.8/4.5/12.5の19個に達し、月次で
+  「何をどの順番で確認すればいいか」の導線がなかった
+
+追加・変更:
+- 新規 services/checklist_state.py：
+  - チェックリストの5項目定義（`CHECKLIST_ITEMS`）
+  - 表示モード（簡易/詳細）とチェック状態を`.fire_compass_checklist.json`
+    へ永続化する`load_checklist_state` / `save_checklist_state` /
+    `reset_checklist_items`
+  - history_manager.pyと同じ公開モード対応のファイルパス設計
+    （公開モード時はセッションIDでファイルを分離）
+- app.py：
+  - タイトル下に「🗂️ 簡易モード」トグルと5項目チェックボックス、
+    「↺ チェックをリセット」ボタンを追加
+  - チェック状態・モード設定は次回起動時も保持（月が変わっても自動
+    リセットはしない。手動リセットボタンのみ）
+  - 簡易モードON時、以下をst.expanderで折りたたみ表示
+    （expanded=not simple_mode）：
+    - 「📝 入力・資産の確認・編集（0〜3.8）」
+    - 「🔍 詳細分析を見る（6〜12）」
+    - 「📁 保存・履歴管理（13）」
+  - 常時表示のまま残したのは、チェックリスト自体・実行ボタン・
+    4/4.5/5/12.5
+
+設計:
+- 既存の計算モジュールは一切変更しない。表示の折りたたみとチェック
+  リストの追加のみ
+- チェックリストは表示用のメモであり、判定計算には使用しない
+  （Sprint23でこの旨を画面上にも明記）
+
+テスト:
+未実行。checklist_state.pyについてはhistory_manager.pyの既存テスト
+（tests/test_history_manager.py）と同じ観点（保存/読込/リセット、
+壊れたJSONへの耐性等）でtests/test_checklist_state.pyを追加することを
+推奨
+
+## Sprint 21完了
+主要機能:
+社会保険料・国民年金・住民税の概算重ね掛けを目立たせる表示。
+
+背景:
+- 国民健康保険料・国民年金保険料・住民税という3つの全国一律の簡易
+  モデルを積み上げて安全生活費から一発で差し引いており、個々には
+  「概算です」と注記があるものの、合算後の数字が精密に見えてしまう
+  という指摘
+- 幅（レンジ）表示も検討したが、全国一律モデルには統計的根拠のある
+  上限・下限がないため見送り、「概算であることを目立たせる」方向を採用
+
+追加・変更:
+- app.py：
+  - section4「安全生活費」のメトリクスラベルに、控除がある場合のみ
+    「（概算込み）」を付与
+  - 従来2つに分かれていた小さいキャプション（国保・国民年金の注記／
+    住民税の注記）を1つの`st.info()`（合計金額つき）に統合
+  - section3.7の合計メトリクスのラベルを「合計（月額目安）」→
+    「合計（全国一律モデルの概算）」に変更し、常時表示の注記
+    キャプションを追加
+
+設計:
+- social_insurance_engine.py／resident_tax_engine.py／
+  monthly_budget_engine.pyの計算ロジックは一切変更しない。表示文言・
+  レイアウトの変更のみ
+
+テスト:
+未実行（表示文言のみの変更のためservices/配下への影響はない想定）
+
+## Sprint 22完了
+主要機能:
+判定根拠（reasonsタグ）のカテゴリグルーピング表示。
+
+背景:
+- reasonsタグがSprint追加のたびに場当たり的にフラットな箇条書きへ
+  追加されており、今後も増え続ける構造だった
+
+追加・変更:
+- services/budget_explanation.py：
+  - タグ→カテゴリの対応表`_REASON_CATEGORY`と、カテゴリの表示順・
+    ラベル`_CATEGORY_ORDER` / `_CATEGORY_LABELS`を新設
+    （生活費調整の主な要因／上限生活費／今月以降の大型支出／
+    固定費の控除〈概算〉の4カテゴリ）
+  - `BudgetExplanation`を`details: List[str]`から
+    `groups: List[BudgetExplanationGroup]`（カテゴリ見出し＋説明文
+    リスト）へ変更。該当タグが0件のカテゴリはgroupsに含まれない
+- app.py：
+  - 「📋 この判定の根拠を見る」の描画を、カテゴリ見出し付きの表示へ
+    追従修正
+
+設計:
+- monthly_budget_engine.pyのreasonsタグ自体・計算ロジックは変更しない
+- 今後タグが増える場合、budget_explanation.py内の対応表に1行追加
+  するだけでよく、app.py側は無改修で済む設計
+
+テスト:
+実行結果：271 passed, 12 failed（すべてtests/test_budget_explanation.py、
+`AttributeError: 'BudgetExplanation' object has no attribute 'details'`）。
+テストファイル自体は変更せず、`BudgetExplanation`に`groups`から動的に
+組み立てる後方互換の`details`プロパティを追加して対応（Sprint23で修正、
+下記参照）
+
+## Sprint 23完了
+主要機能:
+Sprint17レビュー対応（生活費指標の整理・チェックリストの位置づけ明記・
+レポート導線の統一・pages/8/9/10のsimple_mode/public_mode連携）。
+
+背景:
+- monthly_budget_engine.pyのupcoming_large_expenseの実装を確認し、
+  取り崩しプランの大型支出二重計上疑惑はバグではないと結論（Sprint17の
+  項参照）
+- 生活費指標の乱立（section4/5/10）はSprint20で10は簡易モードの
+  折りたたみに格納済みだったが、section5「市場ルール上の生活費目安」は
+  常時表示のままだったため対応
+- pages/7とapp.py内蔵レポートボタンの機能重複、pages/8の常時露出、
+  simple_modeがpages/に及ばない問題への対応
+
+追加・変更:
+- app.py：
+  - section5の「市場ルール上の生活費目安」を、目標現金・追加投資額・
+    取り崩し額の3列メトリクスから外し、「参考：市場ルール単体での
+    生活費目安を見る」という折りたたみへ格下げ
+  - 月次チェックリストのキャプションに「このチェックリストは表示用の
+    メモであり、FIREの判定計算には一切使用されません」を追記
+- pages/7_📄_FIREレポート.py：削除（app.py内蔵の「📄 レポート」
+  ボタンに機能を一本化）
+- pages/8_🔒_公開運用・セキュリティ.py：
+  - `FIRE_COMPASS_PUBLIC_MODE`が無効（非公開モード）の場合は案内文の
+    みを表示して`st.stop()`する形に変更。公開モード有効時は従来通り
+- pages/9_📊_シミュレーション比較.py／
+  pages/10_📋_ログ・監視.py：
+  - `st.session_state.get("simple_mode", True)`を参照し、簡易モード中
+    は案内文のみを表示して`st.stop()`する形に変更。詳細モードに切替
+    後は従来通り使用可能
+
+設計:
+- Streamlitの`pages/`方式は、ファイルが存在する限りサイドバー一覧から
+  機械的に消すことはできないため、st.navigation()への全面移行（大掛かり
+  な方式変更）は見送り、各ページ内でのコンテンツ出し分けにとどめた
+- 履歴・ログのCSV/検索/フィルタ機能（Sprint11〜13, 15〜16）は、削除・
+  凍結の判断材料となる実利用頻度が不明なため、今回は対応を見送り
+  （次回以降、利用実績を踏まえて再検討）
+- fire_engine.py／action_engine.py／crash_strategy.py／
+  tax_optimization.py／ai_advisor.py／monthly_budget_engine.py／
+  history_manager.py／app_logger.py／comparison_engine.py／
+  security.pyのロジック自体は変更しない
+
+テスト:
+未実行（要対応）
+
+## 次の作業
+1. Streamlit起動確認（🧭 FIRE Compass / 🔒 公開運用・セキュリティ /
+   📊 シミュレーション比較 / 📋 ログ・監視。📄 FIREレポートは
+   pages/7削除により表示されなくなっていることを確認）
+2. Sprint18〜23の動作確認項目（各Sprintの本文参照）
+3. python -m pytest -q を実行し、Sprint22のBudgetExplanation構造変更
+   （details→groups）で既存テストが壊れていないか確認。壊れていれば
+   tests/test_budget_explanation.pyを新しい構造に合わせて修正
+4. Sprint18〜23で追加したapp.py側のロジック（checklist_state.pyの
+   保存・読込、simple_modeのpages/連携等）に対するテストが手薄なため、
+   余力があれば追加を検討
+5. git status / git diff / git diff --check
+6. git add .
+7. git commit -m "Complete Sprint 17-23 periodic review and follow-up fixes"
+8. git push origin main（直接push不可のためbundle経由で反映）
+9. push後にGitHub mainの最新コミットを確認
+
+## Sprint 23追記：pytest実行結果とBudgetExplanationのテスト修正
+`python -m pytest -q`実行結果：271 passed, 12 failed。失敗12件は
+すべてtests/test_budget_explanation.pyで、Sprint22の`details`→`groups`
+変更が原因（`AttributeError: 'BudgetExplanation' object has no
+attribute 'details'`）。
+
+対応：
+- services/budget_explanation.py：
+  - `BudgetExplanation`に、`groups`から都度組み立てる後方互換の
+    `details`プロパティ（`@property`）を追加
+  - 独自の状態は持たず、`groups`が正のデータソースのまま
+  - テストファイル自体は変更していない（`.details`を参照する既存の
+    12テストがすべて無改修で通ることを個別に確認済み）
+
+設計:
+- fire_engine.py／action_engine.py／crash_strategy.py／
+  tax_optimization.py／ai_advisor.py／monthly_budget_engine.pyは
+  変更しない
+
+テスト:
+上記12件がすべて通ることをロジック単体で確認済み（環境上pytestは
+未実行のため、python -m pytest -qで最終確認すること）
+
+## Sprint 24完了
+主要機能:
+「7. AI FIREアドバイス」に、今月の取り崩し方針（どの口座からいくら・
+なぜ取り崩すか）まで踏まえた助言をさせる。
+
+背景:
+- きたから「その時々の状況によりいくらまで投資信託を取り崩すのがベストか、
+  現金をいくら残すべきか、どのタイミングで投資信託をどれくらい売れば
+  いいか、資産の継続性を加味してアドバイスする機能」の要望
+- 確認の結果、計算自体はwithdrawal_engine.py（9.今月の取り崩しプラン）・
+  crash_strategy.py（5.今月の推奨行動）・fire_engine.py（12.シナリオ
+  結果）に既に存在したが、Sprint18〜22で追加されたmonthly_budget
+  （4.今月のFIRE判定）・withdrawal_plan（9.）がai_advisor.py側に
+  一切渡されておらず、AIアドバイスがSprint4時点の情報のみで喋っていた
+  ことが判明。既存セクションに情報を追加する方針（新規セクション新設は
+  Sprint17レビューの「二重表示回避」の趣旨に反するため見送り）
+
+追加・変更:
+- app.py：
+  - セクション8（tax_result）・セクション9（withdrawal_plan）の計算を、
+    セクション7（AI FIREアドバイス）より前（strategy/target_cash算出の
+    直後）に前倒し。表示位置（サブヘッダーの順序）は変更せず、二重計算に
+    ならないよう元の位置にあった計算コードは削除
+  - `generate_ai_advice`の呼び出しに`monthly_budget`・`withdrawal_plan`
+    を追加
+- services/ai_advisor.py：
+  - `_withdrawal_steps_text()`を新設。withdrawal_plan.stepsを
+    「口座: 金額（税額目安） - 理由」の形式に整形するだけのヘルパー
+    （金額の再計算はしない）
+  - `_build_fallback_advice()` / `_build_prompt()` /
+    `generate_ai_advice()`に`monthly_budget`・`withdrawal_plan`引数を
+    追加。フォールバック文に「今月の取り崩し方針」セクションを新設し、
+    Gemini側のプロンプトにも同名の出力セクションと
+    「【今月のFIRE判定】」「【今月の取り崩しプラン】」の入力ブロックを追加
+  - 出力文字数の目安を300〜500字→300〜600字に微調整（セクションが
+    1つ増えたため）
+  - プロンプトの指示に「【今月の取り崩しプラン】にない口座・金額を
+    勝手に追加しない」という制約を明記
+  - Sprint23の方針に合わせ、フォールバック文中の
+    「推奨月間支出：strategy.recommended_monthly_spending」の表示は
+    「安全生活費（4.今月のFIRE判定）：monthly_budget.safe_monthly」に
+    差し替え（生活費指標の一本化と整合）
+
+設計:
+- fire_engine.py／crash_strategy.py／withdrawal_engine.py／
+  monthly_budget_engine.py／tax_optimization.pyの計算ロジックは
+  一切変更しない。ai_advisor.pyはこれらの計算結果を文章化するだけ、
+  という既存の設計方針を維持
+- generate_portfolio_commentary()関連（Sprint29）は変更していない
+
+テスト:
+_build_fallback_advice() / _build_prompt()をダミーデータで単体実行し、
+例外なく期待通りの文言が生成されることを確認済み（pytestは未実行）。
+既存のtests/test_ai_advisor.pyがあれば、generate_ai_advice /
+_build_fallback_advice / _build_promptの引数が増えている点の追従修正が
+必要な可能性がある
+
+追記（pytest実行後）:
+実行結果：279 passed, 4 failed（すべてtests/test_ai_advisor.py、
+`monthly_budget`・`withdrawal_plan`を渡さない既存の呼び出しで
+`TypeError: missing 2 required positional arguments`）。テストファイルは
+変更せず、`generate_ai_advice` / `_build_fallback_advice` /
+`_build_prompt`の`monthly_budget`・`withdrawal_plan`をデフォルト値
+`None`のキーワード引数に変更して対応。省略時はSprint23以前と完全に
+同じ文言・構成を返す（新セクション「今月の取り崩し方針」も省略時は
+出力されない）ことをダミーデータで確認済み。
+
+## Sprint 25完了
+主要機能:
+きたからの「アプリ全体を通した忖度なしレビュー」を受けて、③セクション6の
+動的化、⑤入力セクション番号の3ブロック再編、⑥月次チェックリストの
+自動連動を実施。
+
+背景:
+- レビューで指摘した項目のうち、優先度高（①ポートフォリオ総評の
+  スコープ逸脱、②大型支出予定のスコープ逸脱）は継続課題として保留し、
+  優先度中〜自己批判の3点（③⑤⑥）から着手することで合意
+
+追加・変更:
+- app.py：
+  - セクション6「市場環境別の防御ルール」を、通常〜深刻な暴落の4パターン
+    全部を毎回再計算して表示する静的な早見表から、**今の市場環境の行
+    だけ**を表示する動的なセクションに変更（`calculate_crash_strategy`
+    のループ計算をやめ、既に計算済みの`strategy`をそのまま使うだけに
+    簡素化）
+  - 月次チェックリストの5項目のうち4項目（資産残高の最新化・実行して
+    FIRE判定を確認した・今月の推奨行動を確認した・実際に使った金額を
+    記録した）を、実際のsession_state・保存データから自動検出して
+    チェック済みにするようにした（NISA/iDeCoの枠確認のみ引き続き手動）。
+    自動検出の判定材料：CSV取り込み実行の有無
+    （`_asset_import_processed_id`）、シミュレーション実行の有無
+    （`if run:`内で立てる`_simulation_run_this_session`フラグ）、
+    当月分の実績記録の有無（`load_actual_spending`の結果を当月と照合）。
+    自動検出された項目はラベルに「（自動検出）」と表示し、手動で外す
+    こともできる
+  - 入力セクションを、旧「0, 1, 2, 3, 3.5, 3.6, 3.7, 3.8」の8分割から
+    「1. 資産（現金・投資・NISA・iDeCo）」「2. 収支・シミュレーション
+    条件」「3. 保険料・税金・将来予定」の3ブロックに再編。
+    - 1：証券会社CSV取り込み・現在の総金融資産・現金・預金・NISA/
+      課税口座/iDeCoの内訳
+    - 2：現在年齢・終了年齢・年間生活費・年間副収入・想定利回り・
+      インフレ率・安全余裕率・最低現金バッファ・現在の市場環境
+    - 3：年金受給開始年齢・年金見込額・社会保険料/住民税の概算・
+      今月以降の大型支出予定
+    - 各ウィジェットの`key=`・計算ロジックは一切変更せず、配置と
+      見出しのみ変更。入力ブロックのexpanderタイトルも
+      「（0〜3.8）」→「（1〜3）」に更新
+    - 結果セクションは従来通り4から始まるため、1・2・3（入力）→
+      4以降（結果）で番号が自然に連続する
+    - `run_tax_optimization`呼び出し時の「内訳は「3.7. 社会保険料・
+      住民税」で」という文言中の古い番号参照を「3. 保険料・税金・
+      将来予定」に修正
+
+設計:
+- fire_engine.py／action_engine.py／crash_strategy.py／
+  tax_optimization.py／ai_advisor.py／monthly_budget_engine.py／
+  withdrawal_engine.py／social_insurance_engine.py／
+  resident_tax_engine.py等の計算ロジックは一切変更しない
+- checklist_state.py自体（保存ファイルの形式）は変更していない。
+  自動検出ロジックはapp.py側にとどめ、checklist_state.pyは
+  「チェック状態を保存・読込する」という元の役割のまま
+
+テスト:
+未実行（要対応。入力セクションの大規模な再配置のため、
+`streamlit run app.py`での目視確認を特に念入りに行うこと）
+
+## Sprint 25追記：pages/9・10のsimple_mode判定バグ修正
+きたの報告により、詳細モードに切り替えたあとも「シミュレーション比較」
+「ログ・監視」ページで簡易モード用の案内文が表示され続ける不具合が
+判明。
+
+原因：
+`st.session_state.get("simple_mode", True)`をpages/9・10側で直接
+参照していたが、環境によってはmultipage app間でのsession_stateの
+反映タイミングにズレが生じ、最新の値が読めていなかった。
+
+対応：
+- pages/9_📊_シミュレーション比較.py／
+  pages/10_📋_ログ・監視.py：
+  - `services.checklist_state.load_checklist_state`をインポートし、
+    `CHECKLIST_PATH`定数を追加
+  - simple_modeの判定を`st.session_state.get(...)`から
+    `load_checklist_state(path=CHECKLIST_PATH)["simple_mode"]`
+    （＝永続化ファイルを直接読む）に変更。app.py側のトグルは
+    `on_change=_persist_checklist_state`で切り替えるたびに即座に
+    ファイルへ書き込んでいるため、session_stateの伝播に依存せず
+    確実に最新のモードを反映できる
+
+設計:
+- app.py側のsimple_modeトグル・checklist_state.pyのファイル形式は
+  変更していない
+
+テスト:
+未実行（要確認。きたの環境で「詳細モードに切り替えた状態で
+シミュレーション比較・ログ監視ページを開くと、案内文ではなく
+本来の内容が表示されるか」を確認すること）
+
+## Sprint 26完了
+主要機能:
+重大バグ修正（実行後に結果が消える問題）＋ 外部レビュー（PDF提出＋忖度なし
+評価）から採用した6件の対応。
+
+背景:
+- きたが、外部の別レビュー（実行前のスクリーンショットに基づくPDF評価）を
+  提示。レビュー内容を精査した結果、レビューの指摘とは別に、より重大な
+  自前のバグを発見した
+
+**🚨重大バグ（最優先で修正）**：
+`if run: [セクション4〜12] else: [「このアプリで分かること」]`という
+構造で、計算結果がsession_stateにキャッシュされていなかった。
+`st.button()`は押した直後の1回しかTrueを返さない仕様のため、実行後に
+チェックリストへチェックを入れる等、無関係な操作をしただけで`run`が
+再びFalseに戻り、結果セクション（4〜12）がまるごと消えて
+「このアプリで分かること」の説明文に差し替わってしまっていた。
+
+**外部レビューの採否判定**（コードで実際に検証したもののみ採用）：
+- 採用：①年間生活費と社会保険料・税金の二重計上リスク（検証の結果、
+  真のリスクと確認）、②前年所得0円のまま警告がない、③総資産と資産内訳
+  の不一致チェックがない、④想定運用利回りが単一値にしか見えない
+  （実際は12.シナリオ結果で標準/悲観/楽観の3ケースを既に算出している
+  ため、事実誤認ではあるが説明不足だった点のみ対応）、⑤年金の年額/月額
+  誤入力リスク、⑥実行ボタンの赤色
+- 却下・事実誤認：「利回りが単一値のみ」（12.で3シナリオ算出済み）、
+  「サイドバーに公開/ログが常時見える」（Sprint23で非公開モード時は
+  案内文のみに縮小済み）
+- 保留（規模が大きいため）：結果を画面最上部に配置する大幅レイアウト
+  変更、「12.5」「13」等の番号を利用者向けに完全に隠す、履歴・ログ管理
+  機能のさらなる整理縮小
+
+追加・変更:
+- app.py：
+  - `_RUN_SNAPSHOT_KEYS`（実行時に固定する22個の入力値のキー一覧）を
+    新設。`run`が押された瞬間の入力値をsession_stateの
+    `_last_run_inputs`にスナップショット保存し、`run`が押されていない
+    再実行時（チェックリスト操作等）は、このスナップショットから値を
+    復元して同じ計算・表示コードをそのまま再利用する形に変更
+    （`if run:` → `if run or _has_cached_run:`）。結果は「直前に実行
+    した時点の入力値」を反映し続け、入力を変えても再度実行ボタンを
+    押すまで結果には反映されない（従来の意図通りの挙動）
+  - スナップショットから復元して表示している場合は
+    「🔁 直前に「実行」した時点の入力値で、以下の結果を表示しています」
+    という案内キャプションを追加
+  - 「年間生活費」のラベルを「年間生活費（税・社会保険料を除く）（万円）」
+    に変更し、ヘルプテキストで二重計上を明記。「この金額に税・社会保険料
+    をすでに含めている」チェックボックスを追加し、チェック時は警告を表示
+    （計算ロジック自体は変更せず、入力の手引きと警告のみ）
+  - 前年の年間所得目安が0円の場合、初年度の負担を過小評価する可能性が
+    ある旨の警告を追加
+  - 「1. 資産」ブロックの末尾に、内訳合計（現金＋課税口座＋NISA＋
+    iDeCo）と「現在の総金融資産」との差額を常時表示するキャプションを
+    追加。差が10万円を超える場合は警告を表示（総資産は内訳から自動
+    算出はしない。他の資産を保有している場合の入力を妨げないため）
+  - 「想定運用利回り」のヘルプテキストに、実行後は自動的に±2%の悲観・
+    楽観ケースも同時にシミュレーションする旨を追記
+  - 「65歳時点の年金見込額」の下に、月額換算のキャプションを追加
+  - 実行ボタン（`type="primary"`）の色を、Streamlitデフォルトの赤系から
+    青系（`#2563eb`）にCSSで上書き。プロジェクト内で`type="primary"`の
+    ボタンはこの1つのみのため、他のボタンへの影響はない
+
+設計:
+- fire_engine.py／monthly_budget_engine.py／social_insurance_engine.py／
+  resident_tax_engine.py等の計算ロジックは一切変更しない
+- 二重計上チェックボックスは、計算結果を自動補正するものではなく、
+  あくまで警告表示のみ（利用者自身に入力の修正を促す設計。計算ロジックを
+  変えるとAI/Python分離の原則に関わる判断が必要になるため、今回は
+  入力ガイドの範囲にとどめた）
+
+テスト:
+未実行（要対応。特にキャッシュ機構の変更のため、
+「実行→チェックリストにチェック→結果が消えないか」を重点的に確認する
+こと）
+
+## Sprint 27候補（未着手）
+- 履歴・ログのCSV/検索/フィルタ機能の実利用頻度計測、および凍結・縮小の
+  再検討（Sprint17レビューで指摘、Sprint23では判断保留）
+- app.py自体への軽量な統合テスト導入（Streamlitの`AppTest`等）の検討
+  （Sprint17レビューで指摘）
+- 大型支出の分散計上機能（3.、旧3.5）を、資産寿命・取り崩し判断の本流
+  から切り離した独立オプション機能として明確に位置づけ直すか検討
+  （Sprint17レビューで指摘、Sprint25では見送り）
+- セクション0（Sprint25で「1. 資産」内の任意項目に格下げ）の
+  「保有ファンドのバランス総評」（Sprint29、`generate_portfolio_commentary`）
+  が、取り崩し判断という本来のゴールとは別軸の資産配分アドバイスであり、
+  CSVアップロードのたびに追加のGemini API呼び出しが発生する点をどう
+  扱うか（今回のレビューで指摘、優先度高だが未着手）
+- ローカル状態ファイルが6つ（history/events.log/large_expenses/
+  judgment_trend/actual_spending/checklist）に増えている点の整理・
+  統合検討（今回のレビューで指摘）
+- simple_modeの出し分けがapp.py内複数箇所とpages/2ファイルに分散して
+  おり、新セクション追加のたびに個別対応が必要な保守コストをどう
+  減らすか（今回のレビューで指摘）
+- 実行後、結果（今月使える額・残す現金・売却額・行動）を画面最上部に
+  配置する大幅なレイアウト変更（外部レビューで指摘。Streamlitの線形
+  レンダリング上、入力欄より上に結果を出すには構造変更が必要）
+- 「12.5」「13」等のセクション番号を利用者向け画面から完全に隠し、
+  目的別の名称（今月の実績、保存したプラン等）のみを表示する
+  （外部レビューで指摘。13箇所超のサブヘッダーと相互参照の文言変更が
+  必要なため範囲が大きい）
+- 履歴・ログ管理機能のUIをさらに折りたたむ・管理者向けメニューへ分離
+  するか（外部レビューでも指摘。Sprint17由来の論点と同じ）
+  ## Sprint 27：simple_modeガード処理の一元化＋トグル表示ズレバグ修正
+
+### 1. simple_modeガード処理の分散解消
+pages/9・10で`if load_checklist_state(...)["simple_mode"]: st.info(...); st.stop()`
+という同一パターンがコピペされており、CHECKLIST_PATHの組み立ても
+app.py・pages/9・pages/10の3箇所で重複していた。新しいページを
+追加するたびに書き忘れるリスクが保守コストになっていた。
+
+対応：
+- 新規`services/ui_mode.py`を追加
+  - `default_checklist_path()`：プロジェクト直下の既定チェックリスト
+    ファイルパスを返す（BASE_DIR算出をこの1箇所に統合）
+  - `require_advanced_mode(feature_label, path=None)`：簡易モード中は
+    案内文＋`st.stop()`、詳細モードなら何もせず戻る
+- pages/9_📊_シミュレーション比較.py／pages/10_📋_ログ・監視.py：
+  独自のCHECKLIST_PATH定義とif分岐を削除し、
+  `require_advanced_mode("この比較機能")`
+  `require_advanced_mode("このログ・監視機能")`の1行呼び出しに置換
+- `checklist_state.py`自体は「UI副作用なしの純粋な状態I/O層」という
+  性格を保つため変更していない（st.info/st.stopを伴う処理は
+  ui_mode.py側に閉じた）
+- `tests/test_ui_mode.py`新規追加（4件）
+
+### 2. トグル・チェックリストの表示ズレバグ修正
+きたの報告により、簡易モードをONにした状態で「比較」「ログ・監視」
+ページへ移動してから「app」ページに戻ると、実際は`simple_mode=true`
+のまま（ファイルも正しい）にもかかわらず、トグルスイッチの見た目が
+OFFになる不具合が判明。
+
+原因：
+`if not st.session_state.get("_checklist_state_loaded"):`という
+「セッション中1回だけ」ファイルから`simple_mode`・`checklist_*`を
+`session_state`へ読み込むガードが存在していた。simple_mode・
+checklist_*の値は`key=`付きウィジェット（`st.toggle`/`st.checkbox`）
+に紐づくsession_state値であり、そのウィジェットを描画しないページ
+（pages/9・10）を経由するとStreamlit側で値が破棄されることがある。
+しかし`_checklist_state_loaded`フラグ自体はウィジェットに紐づかない
+ただの真偽値なので破棄されず、appページに戻ってきてもTrueのまま
+残る→再読込ブロックがスキップされる→トグルが値なし（デフォルト
+False）で描画される、という流れだった。ファイル自体は
+`on_change=_persist_checklist_state`が発火しないため書き換わらず、
+「ファイルはtrueのままなのに画面だけFalseに見える」という報告と
+一致した。同じ理屈でチェックリストの各チェック状態も影響を受ける
+可能性がある。
+
+対応：
+- app.py内、`_checklist_state_loaded`によるガードを撤廃し、
+  `load_checklist_state`の読み込み＋`setdefault`によるsession_state
+  反映を、ガードなしで毎回（スクリプト実行のたびに）行うように変更
+  - `setdefault`は「まだ値がない場合だけ書き込む」ため、操作中の
+    値を上書きする心配はない。JSON読み込みも軽量なので毎回呼んでも
+    コスト上の問題はない
+
+設計:
+- checklist_state.pyのファイル形式・app.py側のトグル/チェックボックス
+  自体のkey構成は変更していない
+
+テスト:
+python -m pytest -q 実行結果：287 passed, 1 warning（deprecation、無害）
+きた本人による動作確認済み（簡易モードON→比較/ログ画面→app往復で
+トグル・チェック状態が正しく維持されることを確認）

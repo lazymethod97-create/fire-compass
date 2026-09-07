@@ -1,7 +1,7 @@
 {
-  "simple_mode": true,
+  "simple_mode": false,
   "checked_items": [
     "simulation_run",
-    "recommendation_checked"
+    "actual_spending_logged"
   ]
 }

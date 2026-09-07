@@ -12,6 +12,7 @@ from services.comparison_engine import (
 )
 from services.history_manager import load_history
 from services.security import safe_error_message
+from services.ui_mode import require_advanced_mode
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HISTORY_PATH = os.path.join(BASE_DIR, ".fire_compass_history.json")
@@ -28,13 +29,7 @@ st.caption(
     "保存済みのシミュレーション履歴を2〜4件選んで、主要な指標を並べて比較します。"
 )
 
-if st.session_state.get("simple_mode", True):
-    st.info(
-        "現在は簡易モードです。この比較機能は詳細モードでのみ使用できます。"
-        "「FIRE Compass」画面上部の「🗂️ 簡易モード」トグルをオフにしてから、"
-        "改めてこのページを開いてください。"
-    )
-    st.stop()
+require_advanced_mode("この比較機能")
 
 records = load_history(path=HISTORY_PATH)
 

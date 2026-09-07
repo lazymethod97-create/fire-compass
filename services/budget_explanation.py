@@ -152,6 +152,21 @@ class BudgetExplanation:
     binding_summary: str
     groups: List[BudgetExplanationGroup] = field(default_factory=list)
 
+    @property
+    def details(self) -> List[str]:
+        """Sprint22でgroupsへ移行する前の、フラットな説明文リスト。
+
+        既存テスト（tests/test_budget_explanation.py）やapp.py以外の
+        将来の呼び出し元との後方互換のために残している。groups側が
+        正であり、この一覧はgroupsから都度組み立てるだけで独自の状態は
+        持たない。
+        """
+        return [
+            detail
+            for group in self.groups
+            for detail in group.details
+        ]
+
 
 def build_budget_explanation(
     reasons: List[str],

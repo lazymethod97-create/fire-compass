@@ -135,22 +135,23 @@ def _apply_previous_inputs_to_session_state(force: bool = False) -> None:
             st.session_state.setdefault(key, value)
 
 
-if not st.session_state.get("_previous_inputs_loaded"):
-    _apply_previous_inputs_to_session_state(force=False)
-    st.session_state["_previous_inputs_loaded"] = True
-
-
-if not st.session_state.get("_checklist_state_loaded"):
-    _loaded_checklist_state = load_checklist_state(path=CHECKLIST_PATH)
+# Sprint27で修正：以前は「セッション中1回だけ」ファイルから読み込む
+# ガード（_checklist_state_loaded）を設けていたが、simple_mode・
+# checklist_*のsession_state値はページ切替の過程でStreamlitに
+# 破棄されることがあり、その場合ここがスキップされて
+# ウィジェットが値なし（＝デフォルトOFF）で描画され、実際の保存
+# 内容とトグルの見た目がズレるバグがあった。setdefault自体が
+# 「まだ値がない場合だけ書き込む」ため、ガードなしで毎回呼んでも
+# 操作中の値を上書きする心配はなく、JSON読み込みのコストも軽い。
+_loaded_checklist_state = load_checklist_state(path=CHECKLIST_PATH)
+st.session_state.setdefault(
+    "simple_mode", _loaded_checklist_state["simple_mode"]
+)
+for _checklist_item_id, _ in CHECKLIST_ITEMS:
     st.session_state.setdefault(
-        "simple_mode", _loaded_checklist_state["simple_mode"]
+        f"checklist_{_checklist_item_id}",
+        _checklist_item_id in _loaded_checklist_state["checked_items"],
     )
-    for _checklist_item_id, _ in CHECKLIST_ITEMS:
-        st.session_state.setdefault(
-            f"checklist_{_checklist_item_id}",
-            _checklist_item_id in _loaded_checklist_state["checked_items"],
-        )
-    st.session_state["_checklist_state_loaded"] = True
 
 
 def _persist_checklist_state() -> None:
@@ -261,19 +262,59 @@ with st.container(border=True):
     st.caption(
         "今月の確認事項（チェック状態は次回起動時も保持されます）。"
         "※このチェックリストは表示用のメモであり、FIREの判定計算には"
-        "一切使用されません。"
+        "一切使用されません。「（自動検出）」の項目は、実際にその操作を"
+        "行うと自動でチェックが入ります（手動で外すこともできます）。"
     )
+
+    # Sprint25で追加。可能な項目は「本当にその操作をしたか」を実際の
+    # session_state・保存データから判定し、自動でチェック済みにする。
+    # 表示用のメモという性質は変えず、計算には一切使用しない。
+    _checklist_auto_detected: set[str] = set()
+
+    if st.session_state.get("_asset_import_processed_id"):
+        _checklist_auto_detected.add("assets_updated")
+
+    if st.session_state.get("_simulation_run_this_session"):
+        _checklist_auto_detected.add("simulation_run")
+        _checklist_auto_detected.add("recommendation_checked")
+
+    _checklist_current_month = date.today().strftime("%Y-%m")
+    try:
+        _checklist_spending_records = load_actual_spending(
+            path=ACTUAL_SPENDING_PATH
+        )
+    except Exception:
+        _checklist_spending_records = []
+
+    for _spending_record in _checklist_spending_records:
+        _spending_record_month = getattr(_spending_record, "month", None)
+        if _spending_record_month is None and isinstance(
+            _spending_record, dict
+        ):
+            _spending_record_month = _spending_record.get("month")
+        if _spending_record_month == _checklist_current_month:
+            _checklist_auto_detected.add("actual_spending_logged")
+            break
+
+    for _auto_item_id in _checklist_auto_detected:
+        st.session_state[f"checklist_{_auto_item_id}"] = True
+
     for _display_item_id, _display_label in CHECKLIST_ITEMS:
+        _checkbox_label = _display_label
+        if _display_item_id in _checklist_auto_detected:
+            _checkbox_label += "（自動検出）"
         st.checkbox(
-            _display_label,
+            _checkbox_label,
             key=f"checklist_{_display_item_id}",
             on_change=_persist_checklist_state,
         )
 
 simple_mode = st.session_state.get("simple_mode", True)
 
-with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded=not simple_mode):
-    st.subheader("0. 保有資産の取り込み（証券会社CSV）")
+with st.expander("📝 入力・資産の確認・編集（1〜3）", expanded=not simple_mode):
+    st.subheader("1. 資産（現金・投資・NISA・iDeCo）")
+
+    st.markdown("**証券会社CSVで取り込む（任意）**")
     st.caption(
         "SBI証券の「保有ファンド一覧」CSVをアップロードすると、下の"
         "「課税口座残高」「NISA現在残高」「NISA累計投資額・簿価」"
@@ -379,9 +420,118 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
                             "ありません。最終判断はご自身で行ってください。"
                         )
 
-    st.subheader("1. FIRE基本情報")
+    st.markdown("**現金・総資産**")
 
-    c1, c2, c3 = st.columns(3)
+    asset1, asset2 = st.columns(2)
+
+    with asset1:
+        current_assets = st.number_input(
+            "現在の総金融資産（万円）",
+            min_value=0.0,
+            step=50.0,
+            key="current_assets",
+        )
+
+    with asset2:
+        cash_assets = st.number_input(
+            "現金・預金（万円）",
+            min_value=0.0,
+            step=50.0,
+            key="cash_assets",
+        )
+
+    st.markdown("**NISA・課税口座・iDeCo**")
+
+    t1, t2 = st.columns(2)
+
+    with t1:
+        nisa_assets = st.number_input(
+            "NISA現在残高（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="nisa_assets",
+        )
+        nisa_contributed = st.number_input(
+            "NISA累計投資額・簿価（万円）",
+            min_value=0.0,
+            step=10.0,
+            help="NISAの非課税保有限度額は取得価額（簿価）ベースです。",
+            key="nisa_contributed",
+        )
+        nisa_growth_contributed = st.number_input(
+            "うち成長投資枠の累計投資額（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="nisa_growth_contributed",
+        )
+        nisa_annual_contributed = st.number_input(
+            "今年のNISA投資額（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="nisa_annual_contributed",
+        )
+
+    with t2:
+        taxable_assets = st.number_input(
+            "課税口座残高（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="taxable_assets",
+        )
+        taxable_gain_ratio_pct = st.slider(
+            "課税口座の含み益割合（%）",
+            min_value=0,
+            max_value=100,
+            step=5,
+            key="taxable_gain_ratio_pct",
+            help=(
+                "課税口座残高のうち含み益（購入時より値上がりした部分）の"
+                "割合の目安です。今月の取り崩しプランで、課税口座から売却"
+                "する場合の税金の目安計算に使用します。"
+            ),
+        )
+        ideco_assets = st.number_input(
+            "iDeCo現在残高（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="ideco_assets",
+        )
+        ideco_monthly_contribution = st.number_input(
+            "iDeCo月額掛金（万円）",
+            min_value=0.0,
+            step=0.1,
+            key="ideco_monthly_contribution",
+        )
+        ideco_annual_limit = st.number_input(
+            "iDeCo年間上限（万円）",
+            min_value=0.0,
+            step=1.0,
+            help="2026年12月1日施行予定の制度改正後の第2号加入者の共通拠出限度額を年額換算した参考値です。実際の上限は加入区分等で異なります。",
+            key="ideco_annual_limit",
+        )
+
+    _asset_breakdown_total = round(
+        cash_assets + taxable_assets + nisa_assets + ideco_assets, 2
+    )
+    _asset_breakdown_diff = round(current_assets - _asset_breakdown_total, 2)
+
+    st.caption(
+        f"内訳合計（現金＋課税口座＋NISA＋iDeCo）：{_asset_breakdown_total:,.1f}万円　"
+        f"／　現在の総金融資産との差：{_asset_breakdown_diff:,.1f}万円"
+    )
+    if abs(_asset_breakdown_diff) > 10.0:
+        st.warning(
+            "⚠️ 「現在の総金融資産」と、内訳（現金・課税口座・NISA・iDeCo）の"
+            f"合計に{abs(_asset_breakdown_diff):,.1f}万円の差があります。"
+            "CSV取り込みと手入力が混在している場合などに起こりやすいです。"
+            "どちらが正しいか確認し、必要なら値を修正してください"
+            "（総資産は内訳から自動計算していないため、他の資産をお持ちの"
+            "場合はこのままで問題ありません）。"
+        )
+
+    st.subheader("2. 収支・シミュレーション条件")
+
+    c1, c2 = st.columns(2)
 
     with c1:
         current_age = st.number_input(
@@ -399,33 +549,36 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
             key="end_age",
         )
 
+    c3, c4 = st.columns(2)
+
     with c3:
-        current_assets = st.number_input(
-            "現在の総金融資産（万円）",
-            min_value=0.0,
-            step=50.0,
-            key="current_assets",
-        )
-
-    c4, c5, c6 = st.columns(3)
-
-    with c4:
-        cash_assets = st.number_input(
-            "現金・預金（万円）",
-            min_value=0.0,
-            step=50.0,
-            key="cash_assets",
-        )
-
-    with c5:
         annual_spending = st.number_input(
-            "年間生活費（万円）",
+            "年間生活費（税・社会保険料を除く）（万円）",
             min_value=0.0,
             step=10.0,
             key="annual_spending",
+            help=(
+                "食費・住居費・光熱費・娯楽費など、日々の生活費の合計を"
+                "入力してください。国民健康保険料・国民年金保険料・住民税は"
+                "「3. 保険料・税金・将来予定」で別途計算し、今月のFIRE判定"
+                "から自動的に差し引かれます。ここに含めてしまうと二重に"
+                "差し引かれ、使える金額が実際より少なく表示されます。"
+            ),
         )
+        annual_spending_includes_tax = st.checkbox(
+            "この金額に税・社会保険料をすでに含めている",
+            key="annual_spending_includes_tax",
+        )
+        if annual_spending_includes_tax:
+            st.warning(
+                "⚠️ 上の「年間生活費」に税・社会保険料が含まれていると、"
+                "「3. 保険料・税金・将来予定」で計算される金額と合わせて"
+                "二重に差し引かれ、今月使える金額が実際より少なく表示されます。"
+                "お手数ですが、年間生活費から税・社会保険料の年間合計額を"
+                "引いた金額に修正することをおすすめします。"
+            )
 
-    with c6:
+    with c4:
         annual_side_income = st.number_input(
             "年間副収入（万円）",
             min_value=0.0,
@@ -433,20 +586,24 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
             key="annual_side_income",
         )
 
-    st.subheader("2. シミュレーション条件")
+    c5, c6, c7 = st.columns(3)
 
-    c7, c8, c9 = st.columns(3)
-
-    with c7:
+    with c5:
         expected_return = st.number_input(
             "想定運用利回り（%）",
             min_value=-20.0,
             max_value=20.0,
             step=0.5,
             key="expected_return",
+            help=(
+                "この数値を基準（標準ケース）として、実行後の「12. シナリオ"
+                "結果」では自動的に-2%（悲観ケース）・+2%（楽観ケース）でも"
+                "同時にシミュレーションします。この1つの数値だけで将来の"
+                "運用成果が決まるわけではありません。"
+            ),
         )
 
-    with c8:
+    with c6:
         inflation = st.number_input(
             "想定インフレ率（%）",
             min_value=0.0,
@@ -455,7 +612,7 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
             key="inflation",
         )
 
-    with c9:
+    with c7:
         safety_margin = st.slider(
             "安全余裕率（%）",
             min_value=0,
@@ -464,11 +621,9 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
             key="safety_margin",
         )
 
-    st.subheader("3. 現金バッファ・市場環境")
+    c8, c9 = st.columns(2)
 
-    c10, c11 = st.columns(2)
-
-    with c10:
+    with c8:
         min_cash_months = st.number_input(
             "最低確保する現金（か月）",
             min_value=0.0,
@@ -478,7 +633,7 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
             key="min_cash_months",
         )
 
-    with c11:
+    with c9:
         auto_market_result = None
         try:
             auto_market_result = _cached_fetch_market_condition()
@@ -515,7 +670,140 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
                 "市場データの自動取得に失敗したため、手動で選択してください。"
             )
 
-    st.subheader("3.5. 今月以降の大型支出予定")
+    st.subheader("3. 保険料・税金・将来予定")
+
+    st.markdown("**年金**")
+
+    p1, p2 = st.columns(2)
+
+    with p1:
+        pension_start_age = st.number_input(
+            "年金受給開始年齢",
+            min_value=65,
+            max_value=75,
+            step=1,
+            key="pension_start_age",
+        )
+        st.caption(
+            "60歳〜受給開始前／受給開始〜74歳／75歳以降のステージを判定し、"
+            "今月の安全生活費の算出に反映します。"
+        )
+
+    with p2:
+        annual_pension = st.number_input(
+            "65歳時点の年金見込額（万円/年）",
+            min_value=0.0,
+            step=10.0,
+            key="annual_pension",
+            help="年額で入力してください（月額ではありません）。",
+        )
+        st.caption(f"月額換算：約{annual_pension / 12:,.1f}万円/月")
+
+    st.markdown("**社会保険料・住民税（国民健康保険・国民年金・住民税）**")
+
+    st.caption(
+        "FIRE後は給与天引きがなくなり、国民健康保険料・国民年金保険料・住民税を"
+        "自分で納付する必要があります。ここで算出した月額目安は、"
+        "「4. 今月のFIRE判定」の安全・推奨・上限生活費から直接差し引かれます。"
+        "国民健康保険料・住民税は自治体ごとに料率・軽減制度が異なるため、"
+        "ここでの金額は全国的な簡易モデルによる概算です。正確な金額は"
+        "居住自治体でご確認ください。"
+    )
+
+    si1, si2 = st.columns(2)
+
+    with si1:
+        prior_year_income = st.number_input(
+            "前年の年間所得目安（万円）",
+            min_value=0.0,
+            step=10.0,
+            key="prior_year_income",
+            help=(
+                "給与所得だけでなく、課税口座の譲渡益・配当など"
+                "国民健康保険料・住民税の算定に含まれる所得の合計を目安として"
+                "入力してください。FIRE直後の1〜2年は在職中の高い所得が"
+                "基準になる点にご注意ください。"
+            ),
+        )
+        if prior_year_income <= 0.005:
+            st.warning(
+                "⚠️ 前年所得が0円になっています。FIRE直後（特に退職1年目・"
+                "2年目）は前年の給与所得を基準に国民健康保険料・住民税が"
+                "計算されるため、0円のままだと初年度の負担をかなり少なく"
+                "見積もってしまう可能性があります。退職前年の所得（源泉徴収票"
+                "等）をご確認のうえ入力してください。"
+            )
+
+    with si2:
+        household_size = st.number_input(
+            "世帯人数（国保加入者数）",
+            min_value=1,
+            max_value=10,
+            step=1,
+            key="household_size",
+            help=(
+                "国民健康保険料の均等割の算定に使用します"
+                "（住民税の均等割は個人単位の定額のため、この人数の影響を"
+                "受けません）。"
+            ),
+        )
+
+    social_insurance_result = calculate_social_insurance(
+        prior_year_income=prior_year_income,
+        household_size=int(household_size),
+        current_age=current_age,
+    )
+
+    resident_tax_result = calculate_resident_tax(prior_year_income=prior_year_income)
+
+    si_m1, si_m2, si_m3, si_m4 = st.columns(4)
+
+    si_m1.metric(
+        "国民健康保険料（月額目安）",
+        f"{social_insurance_result.monthly_health_insurance:,.1f}万円",
+    )
+
+    si_m2.metric(
+        "国民年金保険料（月額目安）",
+        f"{social_insurance_result.monthly_national_pension:,.1f}万円",
+    )
+
+    si_m3.metric(
+        "住民税（月額目安）",
+        f"{resident_tax_result.monthly_total:,.1f}万円",
+    )
+
+    si_m4.metric(
+        "合計（全国一律モデルの概算）",
+        f"{social_insurance_result.monthly_total + resident_tax_result.monthly_total:,.1f}万円",
+    )
+
+    st.caption(
+        "※ 国民健康保険料・国民年金保険料・住民税は、いずれもお住まいの"
+        "自治体や所得状況によって実際の金額が変わる全国一律の簡易モデルに"
+        "よる概算です。上の「合計」も概算3つを足し合わせた目安であり、"
+        "実際の負担額とは異なる場合があります。"
+    )
+
+    with st.expander("国民健康保険料・住民税の内訳を見る"):
+        for component in social_insurance_result.health_insurance_components:
+            capped_note = "（賦課限度額に到達）" if component.capped else ""
+            st.write(
+                f"- {component.label}：所得割 {component.income_levy:,.1f}万円 ＋ "
+                f"均等割 {component.per_capita_levy:,.1f}万円 ＝ "
+                f"{component.capped_amount:,.1f}万円{capped_note}"
+            )
+        st.write(
+            f"- 住民税：所得割 {resident_tax_result.income_levy:,.1f}万円 ＋ "
+            f"均等割 {resident_tax_result.per_capita_levy:,.1f}万円 ＝ "
+            f"{resident_tax_result.annual_total:,.1f}万円/年"
+        )
+        for note in social_insurance_result.notes:
+            st.caption(f"※ {note}")
+        for note in resident_tax_result.notes:
+            st.caption(f"※ {note}")
+
+    st.markdown("**今月以降の大型支出予定**")
 
     st.caption(
         "旅行・車・医療などの不定期な大型支出を登録できます。"
@@ -635,203 +923,21 @@ with st.expander("📝 入力・資産の確認・編集（0〜3.8）", expanded
     else:
         st.caption("登録済みの大型支出予定はありません。")
 
-    st.subheader("3.6. 年金受給開始年齢（ステージ判定用）")
-
-    st.caption(
-        "60歳〜受給開始前／受給開始〜74歳／75歳以降のステージを判定し、"
-        "今月の安全生活費の算出に反映します。詳細な年金額・NISA・iDeCoの"
-        "設定はシミュレーション実行後の「8. NISA・iDeCo・年金最適化」で行います。"
-    )
-
-    pension_start_age = st.number_input(
-        "年金受給開始年齢",
-        min_value=65,
-        max_value=75,
-        step=1,
-        key="pension_start_age",
-    )
-
-    st.subheader("3.7. 社会保険料・住民税（国民健康保険・国民年金・住民税）")
-
-    st.caption(
-        "FIRE後は給与天引きがなくなり、国民健康保険料・国民年金保険料・住民税を"
-        "自分で納付する必要があります。ここで算出した月額目安は、"
-        "「4. 今月のFIRE判定」の安全・推奨・上限生活費から直接差し引かれます。"
-        "国民健康保険料・住民税は自治体ごとに料率・軽減制度が異なるため、"
-        "ここでの金額は全国的な簡易モデルによる概算です。正確な金額は"
-        "居住自治体でご確認ください。"
-    )
-
-    si1, si2 = st.columns(2)
-
-    with si1:
-        prior_year_income = st.number_input(
-            "前年の年間所得目安（万円）",
-            min_value=0.0,
-            step=10.0,
-            key="prior_year_income",
-            help=(
-                "給与所得だけでなく、課税口座の譲渡益・配当など"
-                "国民健康保険料・住民税の算定に含まれる所得の合計を目安として"
-                "入力してください。FIRE直後の1〜2年は在職中の高い所得が"
-                "基準になる点にご注意ください。"
-            ),
-        )
-
-    with si2:
-        household_size = st.number_input(
-            "世帯人数（国保加入者数）",
-            min_value=1,
-            max_value=10,
-            step=1,
-            key="household_size",
-            help=(
-                "国民健康保険料の均等割の算定に使用します"
-                "（住民税の均等割は個人単位の定額のため、この人数の影響を"
-                "受けません）。"
-            ),
-        )
-
-    social_insurance_result = calculate_social_insurance(
-        prior_year_income=prior_year_income,
-        household_size=int(household_size),
-        current_age=current_age,
-    )
-
-    resident_tax_result = calculate_resident_tax(prior_year_income=prior_year_income)
-
-    si_m1, si_m2, si_m3, si_m4 = st.columns(4)
-
-    si_m1.metric(
-        "国民健康保険料（月額目安）",
-        f"{social_insurance_result.monthly_health_insurance:,.1f}万円",
-    )
-
-    si_m2.metric(
-        "国民年金保険料（月額目安）",
-        f"{social_insurance_result.monthly_national_pension:,.1f}万円",
-    )
-
-    si_m3.metric(
-        "住民税（月額目安）",
-        f"{resident_tax_result.monthly_total:,.1f}万円",
-    )
-
-    si_m4.metric(
-        "合計（全国一律モデルの概算）",
-        f"{social_insurance_result.monthly_total + resident_tax_result.monthly_total:,.1f}万円",
-    )
-
-    st.caption(
-        "※ 国民健康保険料・国民年金保険料・住民税は、いずれもお住まいの"
-        "自治体や所得状況によって実際の金額が変わる全国一律の簡易モデルに"
-        "よる概算です。上の「合計」も概算3つを足し合わせた目安であり、"
-        "実際の負担額とは異なる場合があります。"
-    )
-
-    with st.expander("国民健康保険料・住民税の内訳を見る"):
-        for component in social_insurance_result.health_insurance_components:
-            capped_note = "（賦課限度額に到達）" if component.capped else ""
-            st.write(
-                f"- {component.label}：所得割 {component.income_levy:,.1f}万円 ＋ "
-                f"均等割 {component.per_capita_levy:,.1f}万円 ＝ "
-                f"{component.capped_amount:,.1f}万円{capped_note}"
-            )
-        st.write(
-            f"- 住民税：所得割 {resident_tax_result.income_levy:,.1f}万円 ＋ "
-            f"均等割 {resident_tax_result.per_capita_levy:,.1f}万円 ＝ "
-            f"{resident_tax_result.annual_total:,.1f}万円/年"
-        )
-        for note in social_insurance_result.notes:
-            st.caption(f"※ {note}")
-        for note in resident_tax_result.notes:
-            st.caption(f"※ {note}")
-
-    st.subheader("3.8. 資産内訳（NISA・iDeCo・課税口座）")
-    st.caption(
-        "「0. 保有資産の取り込み」でCSVをアップロードした場合、この欄に"
-        "取り込んだ課税口座残高・NISA残高が反映されます。内容は自由に調整できます。"
-    )
-
-    t1, t2, t3 = st.columns(3)
-
-    with t1:
-        nisa_assets = st.number_input(
-            "NISA現在残高（万円）",
-            min_value=0.0,
-            step=10.0,
-            key="nisa_assets",
-        )
-        nisa_contributed = st.number_input(
-            "NISA累計投資額・簿価（万円）",
-            min_value=0.0,
-            step=10.0,
-            help="NISAの非課税保有限度額は取得価額（簿価）ベースです。",
-            key="nisa_contributed",
-        )
-        nisa_growth_contributed = st.number_input(
-            "うち成長投資枠の累計投資額（万円）",
-            min_value=0.0,
-            step=10.0,
-            key="nisa_growth_contributed",
-        )
-        nisa_annual_contributed = st.number_input(
-            "今年のNISA投資額（万円）",
-            min_value=0.0,
-            step=10.0,
-            key="nisa_annual_contributed",
-        )
-
-    with t2:
-        taxable_assets = st.number_input(
-            "課税口座残高（万円）",
-            min_value=0.0,
-            step=10.0,
-            key="taxable_assets",
-        )
-        taxable_gain_ratio_pct = st.slider(
-            "課税口座の含み益割合（%）",
-            min_value=0,
-            max_value=100,
-            step=5,
-            key="taxable_gain_ratio_pct",
-            help=(
-                "課税口座残高のうち含み益（購入時より値上がりした部分）の"
-                "割合の目安です。今月の取り崩しプランで、課税口座から売却"
-                "する場合の税金の目安計算に使用します。"
-            ),
-        )
-        ideco_assets = st.number_input(
-            "iDeCo現在残高（万円）",
-            min_value=0.0,
-            step=10.0,
-            key="ideco_assets",
-        )
-        ideco_monthly_contribution = st.number_input(
-            "iDeCo月額掛金（万円）",
-            min_value=0.0,
-            step=0.1,
-            key="ideco_monthly_contribution",
-        )
-        ideco_annual_limit = st.number_input(
-            "iDeCo年間上限（万円）",
-            min_value=0.0,
-            step=1.0,
-            help="2026年12月1日施行予定の制度改正後の第2号加入者の共通拠出限度額を年額換算した参考値です。実際の上限は加入区分等で異なります。",
-            key="ideco_annual_limit",
-        )
-
-    with t3:
-        annual_pension = st.number_input(
-            "65歳時点の年金見込額（万円/年）",
-            min_value=0.0,
-            step=10.0,
-            key="annual_pension",
-        )
-        st.caption(
-            f"年金受給開始年齢: **{pension_start_age}歳**"
-            "（「3.6. 年金受給開始年齢」で設定した値を使用します）"
-        )
+st.markdown(
+    """
+    <style>
+    button[kind="primary"] {
+        background-color: #2563eb;
+        border-color: #2563eb;
+    }
+    button[kind="primary"]:hover {
+        background-color: #1d4ed8;
+        border-color: #1d4ed8;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 run = st.button(
     "🧭 FIREシミュレーションを実行",
@@ -839,7 +945,77 @@ run = st.button(
     use_container_width=True,
 )
 
-if run:
+_RUN_SNAPSHOT_KEYS = (
+    "current_age",
+    "end_age",
+    "current_assets",
+    "cash_assets",
+    "annual_spending",
+    "annual_side_income",
+    "expected_return",
+    "inflation",
+    "safety_margin",
+    "min_cash_months",
+    "market_condition",
+    "pension_start_age",
+    "annual_pension",
+    "nisa_assets",
+    "nisa_contributed",
+    "nisa_growth_contributed",
+    "nisa_annual_contributed",
+    "taxable_assets",
+    "taxable_gain_ratio_pct",
+    "ideco_assets",
+    "ideco_monthly_contribution",
+    "ideco_annual_limit",
+)
+
+_has_cached_run = st.session_state.get("_last_run_inputs") is not None
+
+if run or _has_cached_run:
+    st.session_state["_simulation_run_this_session"] = True
+
+    if run:
+        # 実行ボタンが押された今回の入力値をスナップショットとして保存する。
+        # チェックリストのチェック等、実行ボタン以外の操作で再実行された
+        # 場合も、このスナップショットを使って直前の結果を表示し続ける
+        # （st.button()は押した直後の1回しかTrueにならないため、
+        # 何もしないと結果セクションが消えて「このアプリで分かること」に
+        # 戻ってしまう不具合があった）。
+        st.session_state["_last_run_inputs"] = {
+            key: globals()[key] for key in _RUN_SNAPSHOT_KEYS
+        }
+    else:
+        _snapshot = st.session_state["_last_run_inputs"]
+        current_age = _snapshot["current_age"]
+        end_age = _snapshot["end_age"]
+        current_assets = _snapshot["current_assets"]
+        cash_assets = _snapshot["cash_assets"]
+        annual_spending = _snapshot["annual_spending"]
+        annual_side_income = _snapshot["annual_side_income"]
+        expected_return = _snapshot["expected_return"]
+        inflation = _snapshot["inflation"]
+        safety_margin = _snapshot["safety_margin"]
+        min_cash_months = _snapshot["min_cash_months"]
+        market_condition = _snapshot["market_condition"]
+        pension_start_age = _snapshot["pension_start_age"]
+        annual_pension = _snapshot["annual_pension"]
+        nisa_assets = _snapshot["nisa_assets"]
+        nisa_contributed = _snapshot["nisa_contributed"]
+        nisa_growth_contributed = _snapshot["nisa_growth_contributed"]
+        nisa_annual_contributed = _snapshot["nisa_annual_contributed"]
+        taxable_assets = _snapshot["taxable_assets"]
+        taxable_gain_ratio_pct = _snapshot["taxable_gain_ratio_pct"]
+        ideco_assets = _snapshot["ideco_assets"]
+        ideco_monthly_contribution = _snapshot["ideco_monthly_contribution"]
+        ideco_annual_limit = _snapshot["ideco_annual_limit"]
+
+        st.caption(
+            "🔁 直前に「実行」した時点の入力値で、以下の結果を表示しています。"
+            "入力を変更した場合は、再度「🧭 FIREシミュレーションを実行」を"
+            "押してください。"
+        )
+
     result = run_fire_simulation(
         FireInput(
             current_age=current_age,
@@ -924,6 +1100,47 @@ if run:
     else:
         recommended_action = "取り崩し・追加投資は不要"
 
+    # Sprint39: セクション8・9で使うtax_result・withdrawal_planを、
+    # セクション7（AI FIREアドバイス）より前に前倒しで計算しておく。
+    # 計算ロジック自体は従来通りで、単に計算するタイミングを早めた
+    # だけであり、以前セクション8・9にあった同じ計算コードは削除している
+    # （二重計算を避けるため）。
+    tax_result = run_tax_optimization(
+        TaxOptimizationInput(
+            nisa_assets=nisa_assets,
+            nisa_contributed=nisa_contributed,
+            nisa_growth_contributed=nisa_growth_contributed,
+            nisa_annual_contributed=nisa_annual_contributed,
+            taxable_assets=taxable_assets,
+            ideco_assets=ideco_assets,
+            ideco_monthly_contribution=ideco_monthly_contribution,
+            ideco_annual_limit=ideco_annual_limit,
+            current_age=current_age,
+            pension_start_age=pension_start_age,
+            annual_pension=annual_pension,
+            annual_spending=annual_spending,
+            end_age=end_age,
+        )
+    )
+
+    withdrawal_amount_needed = round(
+        monthly_budget.safe_monthly + this_month_large_expense_total, 2
+    )
+
+    withdrawal_plan = calculate_withdrawal_plan(
+        amount_needed=withdrawal_amount_needed,
+        cash_assets=cash_assets,
+        cash_buffer_target=target_cash,
+        taxable_assets=taxable_assets,
+        nisa_assets=nisa_assets,
+        ideco_assets=ideco_assets,
+        current_age=current_age,
+        ideco_access_age=tax_result.ideco_access_age,
+        pension_start_age=tax_result.pension_start_age,
+        pension_monthly_income=tax_result.pension_monthly_income,
+        taxable_gain_ratio=taxable_gain_ratio_pct / 100.0,
+    )
+
     st.subheader("4. 今月のFIRE判定")
 
     status_label = {
@@ -988,7 +1205,7 @@ if run:
             f"住民税の月額目安（合計 約{_deducted_estimate_total:,.1f}万円）"
             "を差し引いています。いずれも全国一律の簡易モデルによる概算で、"
             "実際の金額はお住まいの自治体・所得状況により異なります。"
-            "内訳は「3.7. 社会保険料・住民税」でご確認いただけます。"
+            "内訳は「3. 保険料・税金・将来予定」でご確認いただけます。"
         )
 
     budget_explanation = build_budget_explanation(
@@ -1113,31 +1330,24 @@ if run:
     with st.expander("🔍 詳細分析を見る（6〜12）", expanded=not simple_mode):
         st.subheader("6. 市場環境別の防御ルール")
 
-        rule_cols = st.columns(4)
+        st.markdown(f"### 今月：{market_condition}（{strategy.label}）")
 
-        for col, condition in zip(
-            rule_cols,
-            ["通常", "弱気相場", "暴落", "深刻な暴落"],
-        ):
-            condition_strategy = calculate_crash_strategy(
-                base_monthly_spending=result.net_annual_spending / 12.0,
-                min_cash_months=min_cash_months,
-                condition=condition,
-            )
+        rule_cols = st.columns(3)
 
-            with col:
-                st.markdown(f"### {condition}")
-                st.write(
-                    f"現金：**{condition_strategy.target_cash_months:.0f}か月**"
-                )
-                st.write(
-                    f"追加投資：**"
-                    f"{condition_strategy.additional_investment_ratio * 100:.0f}%**"
-                )
-                st.write(
-                    f"生活費削減：**"
-                    f"{condition_strategy.spending_reduction_pct:.0f}%**"
-                )
+        rule_cols[0].metric(
+            "目標現金",
+            f"{strategy.target_cash_months:.0f}か月",
+        )
+        rule_cols[1].metric(
+            "追加投資",
+            f"{strategy.additional_investment_ratio * 100:.0f}%",
+        )
+        rule_cols[2].metric(
+            "生活費削減",
+            f"{strategy.spending_reduction_pct:.0f}%",
+        )
+
+        st.caption(strategy.reason)
 
         st.subheader("7. AI FIREアドバイス")
 
@@ -1148,28 +1358,12 @@ if run:
             recommended_action=recommended_action,
             additional_investment=additional_investment,
             investment_withdrawal=investment_withdrawal,
+            monthly_budget=monthly_budget,
+            withdrawal_plan=withdrawal_plan,
         )
 
         st.markdown(ai_advice)
         st.subheader("8. NISA・iDeCo・年金最適化")
-
-        tax_result = run_tax_optimization(
-            TaxOptimizationInput(
-                nisa_assets=nisa_assets,
-                nisa_contributed=nisa_contributed,
-                nisa_growth_contributed=nisa_growth_contributed,
-                nisa_annual_contributed=nisa_annual_contributed,
-                taxable_assets=taxable_assets,
-                ideco_assets=ideco_assets,
-                ideco_monthly_contribution=ideco_monthly_contribution,
-                ideco_annual_limit=ideco_annual_limit,
-                current_age=current_age,
-                pension_start_age=pension_start_age,
-                annual_pension=annual_pension,
-                annual_spending=annual_spending,
-                end_age=end_age,
-            )
-        )
 
         tax_cols = st.columns(5)
         tax_cols[0].metric(
@@ -1200,24 +1394,6 @@ if run:
         )
 
         st.subheader("9. 今月の取り崩しプラン")
-
-        withdrawal_amount_needed = round(
-            monthly_budget.safe_monthly + this_month_large_expense_total, 2
-        )
-
-        withdrawal_plan = calculate_withdrawal_plan(
-            amount_needed=withdrawal_amount_needed,
-            cash_assets=cash_assets,
-            cash_buffer_target=target_cash,
-            taxable_assets=taxable_assets,
-            nisa_assets=nisa_assets,
-            ideco_assets=ideco_assets,
-            current_age=current_age,
-            ideco_access_age=tax_result.ideco_access_age,
-            pension_start_age=tax_result.pension_start_age,
-            pension_monthly_income=tax_result.pension_monthly_income,
-            taxable_gain_ratio=taxable_gain_ratio_pct / 100.0,
-        )
 
         if this_month_large_expense_total > 0.005:
             st.caption(

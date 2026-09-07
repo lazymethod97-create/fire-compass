@@ -16,6 +16,26 @@ def _scenario_text(scenario: Any) -> str:
     )
 
 
+def _withdrawal_steps_text(withdrawal_plan: Any) -> str:
+    # Sprint24で追加。calculate_withdrawal_plan()の結果（どの口座から
+    # いくら・なぜ取り崩すか）を、AIアドバイス・フォールバック文の両方で
+    # 使えるテキストに整形するだけのヘルパー。金額・税額の再計算は
+    # 一切行わない。
+    lines = []
+    for step in withdrawal_plan.steps:
+        if step.amount <= 0.005 and "利用不可" not in step.source:
+            continue
+        line = f"{step.source}: {step.amount:,.1f}万円"
+        if step.estimated_tax > 0.005:
+            line += f"（税額目安 {step.estimated_tax:,.1f}万円）"
+        lines.append(f"{line} - {step.reason}")
+
+    if not lines:
+        lines.append("今月は資産を取り崩す必要がありません。")
+
+    return "\n".join(lines)
+
+
 def _build_fallback_advice(
     fire_result: Any,
     market_condition: str,
@@ -23,7 +43,23 @@ def _build_fallback_advice(
     recommended_action: str,
     additional_investment: float,
     investment_withdrawal: float,
+    monthly_budget: Any = None,
+    withdrawal_plan: Any = None,
 ) -> str:
+    # Sprint24でmonthly_budget・withdrawal_planを追加したが、いずれも
+    # 省略可能（デフォルトNone）にしてある。既存の呼び出し元
+    # （tests/test_ai_advisor.py等）が新引数を渡さない場合は、Sprint23
+    # 以前と完全に同じ文言・構成を返す。
+    if monthly_budget is not None:
+        current_state_spending_line = (
+            f"- 安全生活費（4.今月のFIRE判定）："
+            f"{monthly_budget.safe_monthly:,.1f}万円"
+        )
+    else:
+        current_state_spending_line = (
+            f"- 推奨月間支出：{strategy.recommended_monthly_spending:,.1f}万円"
+        )
+
     lines = [
         "### AI FIREアドバイス（ルールベース）",
         "",
@@ -31,7 +67,7 @@ def _build_fallback_advice(
         "",
         "#### 現状",
         f"- 純年間支出：{fire_result.net_annual_spending:,.0f}万円",
-        f"- 推奨月間支出：{strategy.recommended_monthly_spending:,.1f}万円",
+        current_state_spending_line,
         f"- 現金：{fire_result.cash_months:.1f}か月分",
         f"- 資産寿命判定：{fire_result.asset_depletion_label}",
         "",
@@ -48,6 +84,22 @@ def _build_fallback_advice(
         f"- {strategy.reason}",
     ]
 
+    if withdrawal_plan is not None:
+        lines.extend(
+            [
+                "",
+                "#### 今月の取り崩し方針",
+                f"今月の資金繰りに必要な金額の目安："
+                f"{withdrawal_plan.total_covered:,.1f}万円",
+                _withdrawal_steps_text(withdrawal_plan),
+            ]
+        )
+        if withdrawal_plan.shortfall_uncovered > 0.005:
+            lines.append(
+                f"- 保有資産だけでは"
+                f"{withdrawal_plan.shortfall_uncovered:,.1f}万円が不足しています。"
+            )
+
     return "\n".join(lines)
 
 
@@ -58,11 +110,46 @@ def _build_prompt(
     recommended_action: str,
     additional_investment: float,
     investment_withdrawal: float,
+    monthly_budget: Any = None,
+    withdrawal_plan: Any = None,
 ) -> str:
     scenarios = "\n".join(
         _scenario_text(scenario)
         for scenario in fire_result.scenario_summaries
     )
+
+    if monthly_budget is not None:
+        monthly_budget_block = f"""
+【今月のFIRE判定（4.、社会保険料・住民税の概算控除後）】
+安全生活費: {monthly_budget.safe_monthly:,.1f}万円
+推奨生活費: {monthly_budget.recommended_monthly:,.1f}万円
+上限生活費: {monthly_budget.max_monthly:,.1f}万円
+"""
+    else:
+        monthly_budget_block = f"""
+推奨月間生活費: {strategy.recommended_monthly_spending:,.1f}万円
+"""
+
+    withdrawal_output_section = ""
+    withdrawal_constraint_line = ""
+    withdrawal_plan_block = ""
+    if withdrawal_plan is not None:
+        withdrawal_output_section = """
+### 今月の取り崩し方針
+今月いくら必要で、どの口座からどの順番でいくら取り崩すとよいか、
+【今月の取り崩しプラン】の内容に沿って説明。
+"""
+        withdrawal_constraint_line = (
+            "- 「今月の取り崩し方針」は【今月の取り崩しプラン】に列挙された"
+            "口座・金額・理由をそのまま分かりやすく言い換えるだけにし、"
+            "そこにない口座や金額を勝手に追加しない\n"
+        )
+        withdrawal_plan_block = f"""
+【今月の取り崩しプラン】
+今月の資金繰りに必要な金額の目安: {withdrawal_plan.total_covered:,.1f}万円
+{_withdrawal_steps_text(withdrawal_plan)}
+保有資産だけで賄えない金額: {withdrawal_plan.shortfall_uncovered:,.1f}万円
+"""
 
     return f"""
 あなたはFIRE（早期リタイア）計画を支援するアドバイザーです。
@@ -76,7 +163,7 @@ def _build_prompt(
 - 不明な情報を推測しない
 - 最終判断はユーザー自身が行う前提にする
 - 初心者にも分かる表現にする
-- 300〜500文字程度にまとめる
+{withdrawal_constraint_line}- 300〜600文字程度にまとめる
 
 出力形式:
 ### 現状
@@ -84,30 +171,28 @@ def _build_prompt(
 
 ### リスク
 資産寿命、現金バッファ、市場環境から見た注意点。
-
+{withdrawal_output_section}
 ### 今月やること
 具体的な行動候補を3つ以内で説明。
 
 【FIREシミュレーション】
 純年間支出: {fire_result.net_annual_spending:,.1f}万円
-推奨月間支出: {fire_result.recommended_monthly_spending:,.1f}万円
 現金生活費: {fire_result.cash_months:.1f}か月
 資産寿命判定: {fire_result.asset_depletion_label}
 
 【市場環境】
 {market_condition}
-
+{monthly_budget_block}
 【市場環境ルール】
 目標現金: {strategy.target_cash_months:.1f}か月
 追加投資率: {strategy.additional_investment_ratio * 100:.0f}%
 生活費削減率: {strategy.spending_reduction_pct:.0f}%
-推奨月間生活費: {strategy.recommended_monthly_spending:,.1f}万円
 
 【今月の推奨行動】
 {recommended_action}
 追加投資候補: {additional_investment:,.1f}万円
 投資資産からの補充候補: {investment_withdrawal:,.1f}万円
-
+{withdrawal_plan_block}
 【資産シミュレーション】
 {scenarios}
 
@@ -123,9 +208,18 @@ def generate_ai_advice(
     recommended_action: str,
     additional_investment: float,
     investment_withdrawal: float,
+    monthly_budget: Any = None,
+    withdrawal_plan: Any = None,
 ) -> str:
     """
     Gemini APIを利用してFIREアドバイスを生成する。
+
+    Sprint24で、monthly_budget（4.今月のFIRE判定）とwithdrawal_plan
+    （9.今月の取り崩しプラン）を追加の引数として受け取れるようにした
+    （いずれも省略可能）。渡された場合、社会保険料・住民税の概算控除後の
+    安全生活費や、どの口座からいくら取り崩すべきかという具体的な指針まで
+    踏まえた助言になる。省略した場合はSprint23以前と同じ内容を返す。
+    fire_result・strategy等、既存の引数の意味は変更していない。
 
     APIキー未設定・SDKエラー・APIエラー時は、
     安全なルールベースのアドバイスへフォールバックする。
@@ -138,6 +232,8 @@ def generate_ai_advice(
         recommended_action=recommended_action,
         additional_investment=additional_investment,
         investment_withdrawal=investment_withdrawal,
+        monthly_budget=monthly_budget,
+        withdrawal_plan=withdrawal_plan,
     )
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -164,6 +260,8 @@ def generate_ai_advice(
                 recommended_action=recommended_action,
                 additional_investment=additional_investment,
                 investment_withdrawal=investment_withdrawal,
+                monthly_budget=monthly_budget,
+                withdrawal_plan=withdrawal_plan,
             ),
         )
 

@@ -9,6 +9,7 @@ from services.app_logger import (
     filter_events,
     load_events,
 )
+from services.ui_mode import require_advanced_mode
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVENT_LOG_PATH = os.path.join(BASE_DIR, ".fire_compass_events.log")
@@ -31,13 +32,7 @@ st.caption(
     "外部サービスへの送信は行いません。"
 )
 
-if st.session_state.get("simple_mode", True):
-    st.info(
-        "現在は簡易モードです。このログ・監視機能は詳細モードでのみ"
-        "使用できます。「FIRE Compass」画面上部の「🗂️ 簡易モード」"
-        "トグルをオフにしてから、改めてこのページを開いてください。"
-    )
-    st.stop()
+require_advanced_mode("このログ・監視機能")
 
 level_filter = st.selectbox(
     "表示するレベル",
