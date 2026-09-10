@@ -10,6 +10,7 @@ from services.action_engine import calculate_monthly_action
 from services.app_logger import log_event
 from services.crash_strategy import calculate_crash_strategy
 from services.fire_engine import FireInput, run_fire_simulation
+from services.monte_carlo_engine import run_monte_carlo_simulation
 from services.large_expense_engine import (
     CATEGORIES as LARGE_EXPENSE_CATEGORIES,
     add_large_expense,
@@ -669,7 +670,20 @@ with st.expander("📝 入力・資産の確認・編集（1〜3）", expanded=n
             st.caption(
                 "市場データの自動取得に失敗したため、手動で選択してください。"
             )
-
+    volatility_pct = st.number_input(
+        "運用リターンの年次ボラティリティ（%）",
+        min_value=0.0,
+        max_value=50.0,
+        step=1.0,
+        value=15.0,
+        key="volatility_pct",
+        help=(
+            "実行後に表示する「資産寿命の成功確率（モンテカルロ・"
+            "シミュレーション）」でのみ使用します。年によるリターンの"
+            "ブレの大きさの目安です。株式中心のポートフォリオを想定した"
+            "既定値は15%です。特にこだわりがなければそのままで構いません。"
+        ),
+    )
     st.subheader("3. 保険料・税金・将来予定")
 
     st.markdown("**年金**")
@@ -968,6 +982,7 @@ _RUN_SNAPSHOT_KEYS = (
     "ideco_assets",
     "ideco_monthly_contribution",
     "ideco_annual_limit",
+    "volatility_pct",
 )
 
 _has_cached_run = st.session_state.get("_last_run_inputs") is not None
@@ -1009,6 +1024,7 @@ if run or _has_cached_run:
         ideco_assets = _snapshot["ideco_assets"]
         ideco_monthly_contribution = _snapshot["ideco_monthly_contribution"]
         ideco_annual_limit = _snapshot["ideco_annual_limit"]
+        volatility_pct = _snapshot["volatility_pct"]
 
         st.caption(
             "🔁 直前に「実行」した時点の入力値で、以下の結果を表示しています。"
@@ -1016,18 +1032,24 @@ if run or _has_cached_run:
             "押してください。"
         )
 
-    result = run_fire_simulation(
-        FireInput(
-            current_age=current_age,
-            end_age=end_age,
-            total_assets=current_assets,
-            cash_assets=cash_assets,
-            annual_spending=annual_spending,
-            annual_side_income=annual_side_income,
-            expected_return_pct=expected_return,
-            inflation_pct=inflation,
-            safety_margin_pct=safety_margin,
-        )
+    fire_input = FireInput(
+        current_age=current_age,
+        end_age=end_age,
+        total_assets=current_assets,
+        cash_assets=cash_assets,
+        annual_spending=annual_spending,
+        annual_side_income=annual_side_income,
+        expected_return_pct=expected_return,
+        inflation_pct=inflation,
+        safety_margin_pct=safety_margin,
+    )
+
+    result = run_fire_simulation(fire_input)
+
+    monte_carlo_result = run_monte_carlo_simulation(
+        fire_input,
+        volatility_pct=volatility_pct,
+        num_trials=5000,
     )
 
     base_action = calculate_monthly_action(
@@ -1565,7 +1587,32 @@ if run or _has_cached_run:
                 st.write(
                     f"資産枯渇：**{scenario.depleted_at}**"
                 )
+        st.subheader("📊 資産寿命の成功確率（モンテカルロ・シミュレーション）")
 
+        st.caption(
+            f"想定利回り（{expected_return:.1f}%）を平均に、年次ボラティリティ"
+            f"{volatility_pct:.0f}%でランダムに変動させ{monte_carlo_result.num_trials:,}回"
+            "試行した結果です。「12. シナリオ結果」の3パターン固定シナリオとは異なり、"
+            "運用成果のブレを踏まえた確率的な目安を示します。"
+        )
+
+        st.metric(
+            f"{end_age}歳まで資産が枯渇しなかった確率",
+            f"{monte_carlo_result.success_rate_pct:.1f}%",
+        )
+
+        mc_chart_df = monte_carlo_result.yearly_df.set_index("age")[
+            ["p10", "p50", "p90"]
+        ]
+        mc_chart_df.columns = ["悲観（下位10%）", "中央値", "楽観（上位10%）"]
+
+        st.line_chart(mc_chart_df, use_container_width=True)
+
+        st.caption(
+            "※これも将来を保証するものではなく、入力した想定利回り・"
+            "ボラティリティに基づく試算です。実際の市場は正規分布通りに"
+            "動くとは限りません。"
+        )
 else:
     st.markdown(
         """
